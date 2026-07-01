@@ -27,15 +27,60 @@ The output is a short, human-readable line describing the fusion protein — for
 
 ![EML4::ALK chimeric protein and domain retention](docs/fusion_domain_map.png)
 
+**Here is the tool's full output for this example** — no installation needed to read it,
+this is exactly what running the bundled example prints:
+
+```
+=== EML4::ALK variant 1 (E13;A20) ===
+
+HGVS.p-like : EML4:p.Met1_Lys496::ALK:p.Tyr1059_Pro1620  (junction hybrid codon -> Val)
+categorical : EML4::ALK
+frame       : in-frame  (protein 1059 aa, internal stops 0)
+junction    : EML4 Lys496 :: ALK Tyr1059  (hybrid codon -> V)
+
+retained domains:
+  [RETAINED] WD40 repeat (298-347)
+  [RETAINED] WD40 repeat (398-437)
+  [RETAINED] WD40 repeat (446-483)
+  [RETAINED] HELP motif (255-293)
+  [RETAINED] Protein kinase domain (1116-1392)
+  [RETAINED] Serine-threonine/tyrosine-protein kinase, catalytic domain (1116-1382)
+  [RETAINED] Tyrosine-protein kinase, catalytic domain (1116-1383)
+  [RETAINED] Protein kinase-like domain superfamily (1089-1381)
+  [RETAINED] Tyrosine-protein kinase, receptor class II, conserved site (1276-1284)
+  [RETAINED] Tyrosine-protein kinase, active site (1245-1257)
+  [RETAINED] Protein kinase, ATP binding site (1122-1150)
+
+knowledge:
+  oncogenic : Oncogenic
+  therapies : Alectinib, Alvespimycin, Crizotinib, Entrectinib, Erlotinib, Lorlatinib,
+              Nivolumab, Retaspimycin Hydrochloride, WHI-P154
+  sources   : CIViC MP 5, Open Targets ENSG00000171094
+```
+
+A few notes on reading this:
+- The several near-duplicate "retained domain" lines under the kinase domain (catalytic
+  domain, active site, ATP-binding site, …) all come from different InterPro entries that
+  describe overlapping or nested regions of the *same* ALK kinase — that redundancy is a
+  property of the underlying domain database, not an error.
+- The **therapies** line mixes evidence of different strength: `crizotinib`, `alectinib`,
+  and `lorlatinib` are the guideline-recognized ALK inhibitors with curated clinical
+  evidence for this fusion (from CIViC); the rest of the list comes from a broader,
+  less clinically curated drug-target database (Open Targets) and includes agents that
+  are investigational or included for other reasons (e.g., HSP90 inhibitors, a JAK
+  inhibitor). This heterogeneity is exactly the kind of thing we want feedback on — how
+  should evidence tiers be separated or labeled for a clinical audience?
+
 This is a research/informatics tool, not a diagnostic device — it is meant to support a
 molecular pathologist's or genomic analyst's interpretation, not replace it. Results
 should be reviewed by a qualified professional before they inform patient care.
 
-**For non-programmers:** the easiest way to try it right now is the worked example in
-[`examples/eml4_alk_offline.py`](examples/eml4_alk_offline.py) — it runs with a single
-command (see Quickstart below) and prints the summary shown above. We're interested in
-feedback on whether this output is useful and clear from a clinical/biological point of
-view — what would you want to see added or presented differently?
+**For non-programmers:** you don't need to run anything to give feedback — the block
+above is the real output. If you do want to run it yourself, the worked example in
+[`examples/eml4_alk_offline.py`](examples/eml4_alk_offline.py) reproduces it with a
+single command (see Quickstart below). We're interested in feedback on whether this
+output is useful and clear from a clinical/biological point of view — what would you
+want to see added, removed, or presented differently?
 
 ---
 
