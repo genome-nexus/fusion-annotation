@@ -1,0 +1,270 @@
+{
+ "five_gene": "EML4",
+ "three_gene": "ALK",
+ "five_transcript": "ENST00000318522",
+ "three_transcript": "ENST00000389048",
+ "five_last_aa": 496,
+ "three_first_aa": 1059,
+ "five_last_aa_res": "K",
+ "three_first_aa_res": "Y",
+ "in_frame": true,
+ "hybrid_codon": true,
+ "junction_residue": "V",
+ "fusion_length": 1059,
+ "internal_stops": 0,
+ "fusion_protein_seq": "MDGFAGSLDDSISAASTSDVQDRLSALESRVQQQEDEITVLKAALADVLRRLAISEDHVASVKKSVSSKGQPSPRAVIPMSCITNGSGANRKPSHTSAVSIAGKETLSSAAKSGTEKKKEKPQGQREKKEESHSNDQSPQIRASPSPQPSSQPLQIHRQTPESKNATPTKSIKRPSPAEKSHNSWENSDDSRNKLSKIPSTPKLIPKVTKTADKHKDVIINQEGEYIKMFMRGRPITMFIPSDVDNYDDIRTELPPEKLKLEWAYGYRGKDCRANVYLLPTGKIVYFIASVVVLFNYEERTQRHYLGHTDCVKCLAIHPDKIRIATGQIAGVDKDGRPLQPHVRVWDSVTLSTLQIIGLGTFERGVGCLDFSKADSGVHLCIIDDSNEHMLTVWDWQKKAKGAEIKTTNEVVLAVEFHPTDANTIITCGKSHIFFWTWSGNSLTRKQGIFGKYEKPKFVQCLAFLGNGDVLTGDSGGVMLIWSKTTVEPTPGKGPKVYRRKHQELQAMQMELQSPEYKLSKLRTSTIMTDYNPNYCFAGKTSSISDLKEVPRKNITLIRGLGHGAFGEVYEGQVSGMPNDPSPLQVAVKTLPEVCSEQDELDFLMEALIISKFNHQNIVRCIGVSLQSLPRFILLELMAGGDLKSFLRETRPRPSQPSSLAMLDLLHVARDIACGCQYLEENHFIHRDIAARNCLLTCPGPGRVAKIGDFGMARDIYRASYYRKGGCAMLPVKWMPPEAFMEGIFTSKTDTWSFGVLLWEIFSLGYMPYPSKSNQEVLEFVTSGGRMDPPKNCPGPVYRIMTQCWQHQPEDRPNFAIILERIEYCTQDPDVINTALPIEYGPLVEEEEKVPVRPKDPEGVPPLLVSQQAKREEERSPAAPPPLPTTSSGKAAKKPTAAEISVRVPRGPAVEGGHVNMAFSQSNPPSELHKVHGSRNKPTSLWNPTYGSWFTEKPTKKNNPIAKKEPHDRGNLGLEGSCTVPPNVATGRLPGASLLLEPSSLTANMKEVPLFRLRHFPCGNVNYGYQQQGLPLEAATAPGAGHYEDTILKSKNSMNQPGP",
+ "frame_status": "in-frame",
+ "domains": [
+  {
+   "accession": "IPR050630",
+   "name": "WD repeat Echinoderm Microtubule-associated Protein-like",
+   "type": "family",
+   "start": 16,
+   "end": 928,
+   "status": "DISRUPTED"
+  },
+  {
+   "accession": "IPR055439",
+   "name": "EML-like, first beta-propeller domain",
+   "type": "domain",
+   "start": 301,
+   "end": 578,
+   "status": "DISRUPTED"
+  },
+  {
+   "accession": "IPR055442",
+   "name": "EML-like, second beta-propeller domain",
+   "type": "domain",
+   "start": 595,
+   "end": 864,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 298,
+   "end": 347,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 398,
+   "end": 437,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 446,
+   "end": 483,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 498,
+   "end": 537,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 581,
+   "end": 620,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 623,
+   "end": 661,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 664,
+   "end": 703,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 710,
+   "end": 758,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001680",
+   "name": "WD40 repeat",
+   "type": "repeat",
+   "start": 823,
+   "end": 864,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR011047",
+   "name": "Quinoprotein alcohol dehydrogenase-like superfamily",
+   "type": "homologous_superfamily",
+   "start": 252,
+   "end": 755,
+   "status": "DISRUPTED"
+  },
+  {
+   "accession": "IPR015943",
+   "name": "WD40/YVTN repeat-like-containing domain superfamily",
+   "type": "homologous_superfamily",
+   "start": 255,
+   "end": 863,
+   "status": "DISRUPTED"
+  },
+  {
+   "accession": "IPR036322",
+   "name": "WD40-repeat-containing domain superfamily",
+   "type": "homologous_superfamily",
+   "start": 718,
+   "end": 864,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR005108",
+   "name": "HELP motif",
+   "type": "conserved_site",
+   "start": 255,
+   "end": 293,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR050122",
+   "name": "Receptor Tyrosine Kinase",
+   "type": "family",
+   "start": 783,
+   "end": 1391,
+   "status": "DISRUPTED"
+  },
+  {
+   "accession": "IPR000719",
+   "name": "Protein kinase domain",
+   "type": "domain",
+   "start": 1116,
+   "end": 1392,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR000998",
+   "name": "MAM domain",
+   "type": "domain",
+   "start": 264,
+   "end": 427,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR000998",
+   "name": "MAM domain",
+   "type": "domain",
+   "start": 478,
+   "end": 636,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR001245",
+   "name": "Serine-threonine/tyrosine-protein kinase, catalytic domain",
+   "type": "domain",
+   "start": 1116,
+   "end": 1382,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR020635",
+   "name": "Tyrosine-protein kinase, catalytic domain",
+   "type": "domain",
+   "start": 1116,
+   "end": 1383,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR055163",
+   "name": "ALK/LTK-like, glycine-rich domain",
+   "type": "domain",
+   "start": 733,
+   "end": 961,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR002172",
+   "name": "Low-density lipoprotein (LDL) receptor class A repeat",
+   "type": "repeat",
+   "start": 437,
+   "end": 473,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR011009",
+   "name": "Protein kinase-like domain superfamily",
+   "type": "homologous_superfamily",
+   "start": 1089,
+   "end": 1381,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR013320",
+   "name": "Concanavalin A-like lectin/glucanase domain superfamily",
+   "type": "homologous_superfamily",
+   "start": 262,
+   "end": 425,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR013320",
+   "name": "Concanavalin A-like lectin/glucanase domain superfamily",
+   "type": "homologous_superfamily",
+   "start": 476,
+   "end": 633,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR036055",
+   "name": "LDL receptor-like superfamily",
+   "type": "homologous_superfamily",
+   "start": 437,
+   "end": 475,
+   "status": "LOST"
+  },
+  {
+   "accession": "IPR002011",
+   "name": "Tyrosine-protein kinase, receptor class II, conserved site",
+   "type": "conserved_site",
+   "start": 1276,
+   "end": 1284,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR008266",
+   "name": "Tyrosine-protein kinase, active site",
+   "type": "active_site",
+   "start": 1245,
+   "end": 1257,
+   "status": "RETAINED"
+  },
+  {
+   "accession": "IPR017441",
+   "name": "Protein kinase, ATP binding site",
+   "type": "binding_site",
+   "start": 1122,
+   "end": 1150,
+   "status": "RETAINED"
+  }
+ ],
+ "breakpoint_label": "E13;A20",
+ "categorical_key": "EML4::ALK",
+ "hgvsp_like": "EML4:p.Met1_Lys496::ALK:p.Tyr1059_Pro1620  (junction hybrid codon -> Val)"
+}
