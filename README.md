@@ -1,5 +1,46 @@
 # fusion-annotation
 
+**What this tool does, in plain terms:** when a tumor sequencing report turns up a gene
+fusion — two genes fused together, like the well-known `EML4::ALK` fusion found in some
+lung cancers — this tool answers two questions about it:
+
+1. **What protein does the fusion actually make, and does it still work?**
+   Fusing two genes only matters if the two halves join up "in frame" (like joining two
+   sentences without garbling the words) and if the piece that survives is the
+   functionally important part. For `EML4::ALK`, the tool shows that the joined protein
+   reads correctly with no premature stop, and that it keeps the whole ALK **kinase**
+   domain — the enzymatic "motor" that, once switched on inappropriately, drives the
+   cancer. It also shows exactly which piece of each original protein is lost.
+2. **What is already known about this fusion clinically?** — is it considered a driver
+   of cancer, and which drugs (e.g., crizotinib, alectinib, lorlatinib for `EML4::ALK`)
+   have evidence of activity against it, pulled from curated knowledgebases (CIViC,
+   Open Targets) in the same open spirit as OncoKB.
+
+The output is a short, human-readable line describing the fusion protein — for example:
+
+> `EML4:p.Met1_Lys496::ALK:p.Tyr1059_Pro1620` — translation: *the fusion keeps the first
+> 496 amino acids of EML4 and everything from position 1059 onward in ALK, including its
+> intact kinase domain.*
+
+— plus a figure like the one below, showing which parts of each parent protein are kept
+(colored) versus lost (grey) in the fusion.
+
+![EML4::ALK chimeric protein and domain retention](docs/fusion_domain_map.png)
+
+This is a research/informatics tool, not a diagnostic device — it is meant to support a
+molecular pathologist's or genomic analyst's interpretation, not replace it. Results
+should be reviewed by a qualified professional before they inform patient care.
+
+**For non-programmers:** the easiest way to try it right now is the worked example in
+[`examples/eml4_alk_offline.py`](examples/eml4_alk_offline.py) — it runs with a single
+command (see Quickstart below) and prints the summary shown above. We're interested in
+feedback on whether this output is useful and clear from a clinical/biological point of
+view — what would you want to see added or presented differently?
+
+---
+
+## For developers
+
 Standards-aligned **gene-fusion annotation**: a protein-effect engine (VEP-like) and
 a knowledge engine (OncoKB-like), joined by an **HGVS.p-like protein-level interface**.
 
@@ -8,7 +49,7 @@ offline-testable. Live annotation sources (Ensembl, InterPro, CIViC, Open Target
 are reached through a pluggable `DataProvider` — including an MCP-backed provider for
 agentic and [Genome Nexus](https://www.genomenexus.org/) / cBioPortal workflows.
 
-## Why
+### Why
 
 Fusion callers (STAR-Fusion, Arriba, FusionInspector, …) tell you *that* a fusion
 exists. Oncogenicity scorers (OncoFuse, FusionPath, …) tell you *how likely it is to
@@ -27,14 +68,14 @@ distinction between an **assayed** fusion (a specific breakpoint, annotated by L
 and a **categorical** fusion (a gene pair, keyed by Layer 3), and uses the HGVS `::`
 adjoined-protein operator for the junction string.
 
-## Install
+### Install
 
 ```bash
 pip install -e .            # core only, no dependencies
 pip install -e ".[test]"    # + pytest
 ```
 
-## Quickstart (offline)
+### Quickstart (offline)
 
 ```python
 from fusion_annotation import Transcript, build_exon_cds_map, annotate_fusion
@@ -52,7 +93,7 @@ Run the bundled worked example:
 python examples/eml4_alk_offline.py
 ```
 
-## Live annotation via MCP
+### Live annotation via MCP
 
 ```python
 # In a Claude Science repl cell, host.mcp is the upstream connector callable.
@@ -70,14 +111,14 @@ uses these upstream servers:
 - **protein-annotation** (InterPro): `get_domain_architecture`
 - **clinical-genomics** (CIViC / Open Targets): `civic_search_molecular_profiles`, `civic_search_evidence`
 
-## As an MCP tool
+### As an MCP tool
 
 `fusion_annotation.mcp_tool` exposes a single `annotate_gene_fusion` tool
 (`TOOL_SCHEMA` + `annotate_fusion_tool()` backend) that you can register with any MCP
 server framework, so an LLM agent can annotate a fusion in one call. See the module
 docstring for a FastMCP example.
 
-## The EML4::ALK worked example
+### The EML4::ALK worked example
 
 `EML4::ALK` variant 1 (E13;A20) — EML4 exon 13 joined to ALK exon 20 — is the canonical
 NSCLC driver. This package reproduces, from primary data:
@@ -89,23 +130,22 @@ NSCLC driver. This package reproduces, from primary data:
   the mechanism: loss of ALK's extracellular/TM region + EML4-driven oligomerization
   of an intact kinase = constitutive activation
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture and rationale.
+See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture and rationale (the
+domain-retention figure is shown at the top of this README).
 
-![EML4::ALK chimeric protein and domain retention](docs/fusion_domain_map.png)
-
-## Tests
+### Tests
 
 ```bash
 pytest            # 11 offline assertions against the EML4::ALK truth values
 ```
 
-## Status & roadmap
+### Status & roadmap
 
 v0.1 handles exon-boundary breakpoints on canonical transcripts. Planned: genomic
 (non-exon-boundary) breakpoints, all-transcript enumeration, NMD prediction,
 full VICC GFS JSON schema + GA4GH VRS/Cat-VRS identifiers, `hgvs` library round-trip
 validation, and a proper OncoKB backend. See docs/DESIGN.md §6.
 
-## License
+### License
 
 Apache-2.0 (see [LICENSE](LICENSE))
