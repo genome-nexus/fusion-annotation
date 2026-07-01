@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fusion-annotation"
+version = "0.1.0"
+description = "Standards-aligned gene-fusion annotation: protein effect (VEP-like) + knowledge (OncoKB-like) joined by an HGVS.p-like interface."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Genome Nexus" }]
+keywords = ["bioinformatics", "gene fusion", "cancer genomics", "HGVS", "annotation", "VICC", "oncokb"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+# Core has ZERO runtime dependencies (stdlib only) — deliberately, so the
+# annotation engine is portable and offline-testable.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+mcp = []  # MCPDataProvider needs a host.mcp callable, injected at runtime.
+dev = ["pytest>=7", "ruff", "build"]
+
+[project.urls]
+Homepage = "https://github.com/genome-nexus/fusion-annotation"
+Repository = "https://github.com/genome-nexus/fusion-annotation"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fusion_annotation = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
