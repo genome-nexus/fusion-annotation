@@ -225,3 +225,15 @@ with each parent segment reconstructed exactly from the fetched sequences.
 - Wrap `annotate_fusion` as an MCP tool so it plugs into your agentic cBioPortal
   workflows directly — input a fusion call, get back the interface object +
   knowledge in one step.
+
+---
+
+## Validation — frame engine against known in-frame fusions
+
+The reading-frame engine was validated against three literature in-frame
+oncogenic drivers (NPM1-ALK, LMNA-NTRK1, CD74-ROS1) with pinned transcripts and
+an exon sweep. Two recovered the textbook in-frame breakpoint exactly; the third
+(CD74-ROS1) exposed an **isoform-disambiguation limitation** of exon-number-only
+input. Full per-exon results and the resulting input-format recommendations are
+in [`FRAME_VALIDATION.md`](FRAME_VALIDATION.md), tracked as
+[issue #3](https://github.com/genome-nexus/fusion-annotation/issues/3).
