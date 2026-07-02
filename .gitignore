@@ -10,3 +10,4 @@ venv/
 .ruff_cache/
 *.egg
 .DS_Store
+server/.token
