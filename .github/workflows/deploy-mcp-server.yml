@@ -58,7 +58,7 @@ jobs:
         run: |
           ENV_VARS="FUSION_ANNOTATION_TOKEN=${{ secrets.FUSION_ANNOTATION_TOKEN }}"
           if [ -n "${{ inputs.allowed_hosts }}" ]; then
-            ENV_VARS="$ENV_VARS,FUSION_ANNOTATION_ALLOWED_HOSTS=${{ inputs.allowed_hosts }}"
+            ENV_VARS="$ENV_VARS;FUSION_ANNOTATION_ALLOWED_HOSTS=${{ inputs.allowed_hosts }}"
           fi
           gcloud run deploy "${{ env.SERVICE }}" \
             --image "$IMAGE" \
@@ -69,7 +69,7 @@ jobs:
             --min-instances=0 \
             --memory=512Mi \
             --cpu=1 \
-            --set-env-vars="$ENV_VARS" \
+            --set-env-vars="^;^$ENV_VARS" \
             --quiet
 
       - name: Print service URL
