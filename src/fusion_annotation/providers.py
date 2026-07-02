@@ -62,8 +62,6 @@ class MCPDataProvider:
         # Resolve a symbol to its canonical transcript, or accept a transcript id.
         rec = self.mcp("genomes", "ensembl_lookup", query=gene_or_tx,
                        species=self.species, expand=True)["record"]
-        # A transcript id was passed directly iff the caller did not name a gene symbol.
-        user_pinned_tx = gene_or_tx.upper().startswith("ENS")
         if rec.get("object_type") == "Gene" or "Transcript" in rec:
             # a gene was returned; descend to the canonical transcript
             tx_id = rec.get("canonical_transcript", "").split(".")[0]
@@ -72,10 +70,12 @@ class MCPDataProvider:
             rec = self.mcp("genomes", "ensembl_lookup", query=tx_id, expand=True)["record"]
             is_canonical = True
         else:
+            # Reached only when a transcript id was passed directly (user-pinned);
+            # a symbol resolves to a Gene and is handled above.
             tx_id = rec["id"]
             gene_id = rec.get("Parent", "")
             gene_symbol = gene_or_tx
-            is_canonical = bool(rec.get("is_canonical")) if not user_pinned_tx else None
+            is_canonical = None
 
         tr = rec["Translation"]
         cds = self.mcp("genomes", "ensembl_sequence", stable_id=rec["id"], seq_type="cds")["seq"]

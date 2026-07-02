@@ -126,6 +126,22 @@ def test_known_pair_in_frame_no_warning(provider):
     assert r["warnings"] == []
 
 
+def test_out_of_frame_warning_is_context_aware_for_genomic(provider):
+    # When genomic breakpoints were already supplied, the warning must not tell the
+    # caller to "supply genomic breakpoints" — those already pin the isoform.
+    eml4 = provider.get_transcript("EML4")
+    alk = provider.get_transcript("ALK")
+    r = annotate_fusion(provider, "EML4", "ALK",
+                        five_genomic=eml4.exon_genomic[12][1],    # EML4 exon 13 3' end
+                        three_genomic=alk.exon_genomic[28][1])    # ALK exon 29 5' start
+    assert r["interface"]["frame_status"] != "in-frame"
+    assert len(r["warnings"]) == 1
+    warning = r["warnings"][0]
+    assert "known oncogenic fusion pair" in warning
+    assert "supply genomic breakpoints" not in warning
+    assert "five_genomic/three_genomic" not in warning
+
+
 # ---- missing breakpoint ----------------------------------------------------
 def test_missing_breakpoint_raises(provider):
     with pytest.raises(ValueError):

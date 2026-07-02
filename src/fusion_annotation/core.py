@@ -435,7 +435,8 @@ def annotate_fusion(provider: DataProvider,
         "five": _echo_partner(five, five_tx, five_bp),
         "three": _echo_partner(three, three_tx, three_bp),
     }
-    warnings = _sanity_warnings(five_gene, three_gene, fp, kn)
+    both_genomic = five_bp["type"] == "genomic" and three_bp["type"] == "genomic"
+    warnings = _sanity_warnings(five_gene, three_gene, fp, kn, both_genomic)
 
     return {"interface": fp.to_dict(), "knowledge": asdict(kn),
             "resolved": resolved, "warnings": warnings}
@@ -460,16 +461,21 @@ def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict)
 
 
 def _sanity_warnings(five_gene: str, three_gene: str,
-                     fp: FusionProtein, kn: "FusionKnowledge") -> list[str]:
+                     fp: FusionProtein, kn: "FusionKnowledge",
+                     both_genomic: bool) -> list[str]:
     """Flag a known oncogenic partner pair that reconstructs out-of-frame (issue #3)."""
     warnings: list[str] = []
     pair = frozenset({five_gene.upper(), three_gene.upper()})
     known = pair in KNOWN_ONCOGENIC_PAIRS or bool(kn.oncogenic)
     if known and fp.frame_status != "in-frame":
+        # Genomic breakpoints already pin the isoform, so don't suggest them again.
+        remedy = ("Double-check the genomic breakpoints and the resolved transcripts "
+                  "against the assayed fusion." if both_genomic else
+                  "Re-check the exon numbers against the pinned transcripts, or supply "
+                  "genomic breakpoints (five_genomic/three_genomic) to remove "
+                  "exon-numbering ambiguity between isoforms.")
         warnings.append(
             f"{fp.categorical_key()} is a known oncogenic fusion pair but this breakpoint "
-            f"reconstructs as '{fp.frame_status}'. This often means the exon numbers or "
-            "transcript isoforms do not match the assayed breakpoint. Re-check the exon "
-            "numbers against the pinned transcripts, or supply genomic breakpoints "
-            "(five_genomic/three_genomic) to remove exon-numbering ambiguity between isoforms.")
+            f"reconstructs as '{fp.frame_status}'. This often means the breakpoints or "
+            f"transcript isoforms do not match the assayed fusion. {remedy}")
     return warnings

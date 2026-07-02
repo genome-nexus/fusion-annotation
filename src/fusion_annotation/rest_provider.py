@@ -85,10 +85,12 @@ class RestDataProvider:
             rec = _ensembl_get(f"/lookup/id/{tx_id}", expand=1)
             is_canonical = True
         else:
+            # Reached only when a transcript id was passed directly (user-pinned);
+            # a symbol resolves to a Gene and is handled above.
             tx_id = rec["id"]
             gene_id = rec.get("Parent", "")
             gene_symbol = gene_or_tx
-            is_canonical = bool(rec.get("is_canonical")) if not user_pinned_tx else None
+            is_canonical = None
 
         tr = rec["Translation"]
         cds = _ensembl_get(f"/sequence/id/{rec['id']}", type="cds")["seq"]
