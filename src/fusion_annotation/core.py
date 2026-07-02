@@ -432,6 +432,9 @@ def annotate_fusion(provider: DataProvider,
     kn = annotate_knowledge(fp, provider)
 
     resolved = {
+        # Echo the genome build so a caller can confirm their genomic breakpoints
+        # were interpreted against the build they intended (defaults to GRCh38).
+        "genome_build": getattr(provider, "assembly", "GRCh38"),
         "five": _echo_partner(five, five_tx, five_bp),
         "three": _echo_partner(three, three_tx, three_bp),
     }

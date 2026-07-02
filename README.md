@@ -188,6 +188,7 @@ To use it from Claude.ai or Claude Desktop as a remote connector:
   "three_genomic": null,
   "five_transcript": null,
   "three_transcript": null,
+  "genome_build": "GRCh38",
   "species": "homo_sapiens"
 }
 ```
@@ -199,15 +200,27 @@ term). A genomic position pins the transcript isoform and removes exon-numbering
 ambiguity between overlapping isoforms; when both are supplied for a partner, the
 genomic position wins.
 
+**Genome build.** `genome_build` selects the assembly the coordinates and
+transcripts come from — `"GRCh38"` (default) or `"GRCh37"` (aliases `hg38` /
+`hg19`). This matters because a genomic breakpoint is only meaningful against the
+build it was called on: Ensembl serves each build from a different host, and the
+tool maps your coordinate against that build's exon table. **If you pass GRCh37
+coordinates, set `genome_build: "GRCh37"`** — otherwise they are silently
+interpreted against GRCh38 and land on the wrong CDS base. (Exon-number input is
+build-agnostic, so it's unaffected.) The chosen build is echoed back under
+`resolved.genome_build`.
+
 The transcript fields are optional and default to each gene's canonical Ensembl
-transcript. The response echoes, under a `resolved` block, the transcript actually
-used for each partner and how each breakpoint was interpreted, and a `warnings`
-list flags a known oncogenic gene pair that reconstructs out-of-frame (usually a
-sign of a wrong exon number or isoform rather than a real frameshift):
+transcript. The response echoes, under a `resolved` block, the genome build, the
+transcript actually used for each partner, and how each breakpoint was
+interpreted; a `warnings` list flags a known oncogenic gene pair that reconstructs
+out-of-frame (usually a sign of a wrong exon number or isoform rather than a real
+frameshift):
 
 ```json
 {
   "resolved": {
+    "genome_build": "GRCh38",
     "five":  {"gene": "EML4", "transcript": "ENST00000318522", "transcript_source": "canonical",
               "breakpoint": {"type": "exon", "exon": 13, "cds_coord": 1489}},
     "three": {"gene": "ALK",  "transcript": "ENST00000389048", "transcript_source": "canonical",

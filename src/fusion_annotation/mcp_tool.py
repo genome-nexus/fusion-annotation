@@ -56,6 +56,7 @@ TOOL_SCHEMA = {
             "three_genomic": {"type": "string", "description": "Genomic breakpoint on the 3' partner. Pins the isoform; preferred over three_exon when both are given."},
             "five_transcript": {"type": "string", "description": "Optional Ensembl transcript id for the 5' partner (defaults to canonical; echoed back under resolved)"},
             "three_transcript": {"type": "string", "description": "Optional Ensembl transcript id for the 3' partner"},
+            "genome_build": {"type": "string", "enum": ["GRCh38", "GRCh37"], "description": "Genome assembly the coordinates/transcripts come from. Default GRCh38. Genomic breakpoints MUST match this build; echoed back under resolved.genome_build."},
         },
         "required": ["five_gene", "three_gene"],
     },
@@ -68,14 +69,20 @@ def annotate_fusion_tool(mcp: Callable,
                          five_transcript: Optional[str] = None,
                          three_transcript: Optional[str] = None,
                          five_genomic=None, three_genomic=None,
+                         genome_build: str = "GRCh38",
                          species: str = "homo_sapiens") -> dict:
     """Backend for the MCP tool. `mcp` is a callable `mcp(server, method, **kwargs)`.
 
     Each partner's breakpoint is given as an exon number or a genomic position (the
-    latter pins the isoform). Returns the three-layer annotation dict:
+    latter pins the isoform, interpreted against `genome_build`). Returns the
+    three-layer annotation dict:
     {"interface": ..., "knowledge": ..., "resolved": ..., "warnings": ...}.
+
+    NOTE: the MCP `genomes` connector is GRCh38-only, so a non-GRCh38
+    `genome_build` raises here. The REST-backed public server (server/app.py)
+    supports GRCh37.
     """
-    provider = MCPDataProvider(mcp, species=species)
+    provider = MCPDataProvider(mcp, species=species, assembly=genome_build)
     return annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,
