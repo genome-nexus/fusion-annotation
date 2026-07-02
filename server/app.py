@@ -106,7 +106,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Gate every request except /healthz behind a static bearer token."""
 
     async def dispatch(self, request: Request, call_next):
-        if not TOKEN or request.url.path == "/healthz":
+        if not TOKEN or request.url.path.rstrip("/") == "/healthz":
             return await call_next(request)
         auth = request.headers.get("authorization", "")
         if auth != f"Bearer {TOKEN}":
