@@ -55,27 +55,38 @@ mcp = FastMCP(
 def annotate_gene_fusion(
     five_gene: str,
     three_gene: str,
-    five_exon: int,
-    three_exon: int,
+    five_exon: int | None = None,
+    three_exon: int | None = None,
+    five_genomic: int | str | None = None,
+    three_genomic: int | str | None = None,
     five_transcript: str | None = None,
     three_transcript: str | None = None,
     species: str = "homo_sapiens",
 ) -> dict:
     """Annotate a gene fusion at the protein level.
 
-    Given a 5' and 3' partner gene and the fused exon boundaries, reconstruct
-    the chimeric protein (frame, junction, hybrid codon, retained/lost
-    domains), emit an HGVS.p-like junction string, and attach curated clinical
-    knowledge (therapies, evidence, disease context) for the categorical
-    gene-pair fusion.
+    Given a 5' and 3' partner gene and the fused breakpoints, reconstruct the
+    chimeric protein (frame, junction, hybrid codon, retained/lost domains),
+    emit an HGVS.p-like junction string, and attach curated clinical knowledge
+    (therapies, evidence, disease context) for the categorical gene-pair fusion.
+
+    Each partner's breakpoint may be given either as an exon number or as a
+    genomic position. A genomic position pins the transcript isoform and removes
+    exon-numbering ambiguity between overlapping isoforms; when both are supplied
+    for a partner the genomic position wins. The transcript actually used and how
+    each breakpoint was interpreted are echoed back under ``resolved``, and a
+    ``warnings`` list flags a known oncogenic pair that comes back out-of-frame.
 
     Args:
         five_gene: 5' partner gene symbol, e.g. "EML4".
         three_gene: 3' partner gene symbol, e.g. "ALK".
         five_exon: last exon (1-based) contributed by the 5' partner.
         three_exon: first exon (1-based) contributed by the 3' partner.
+        five_genomic: genomic breakpoint on the 5' partner — an int position, a
+            "chr6:117324415" form, or an HGVS "g.117324415" term.
+        three_genomic: genomic breakpoint on the 3' partner (same forms).
         five_transcript: optional Ensembl transcript id for the 5' partner
-            (defaults to its canonical transcript).
+            (defaults to its canonical transcript; echoed back under ``resolved``).
         three_transcript: optional Ensembl transcript id for the 3' partner.
         species: Ensembl species (default "homo_sapiens").
     """
@@ -83,7 +94,8 @@ def annotate_gene_fusion(
     return annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,
-        five_tx=five_transcript, three_tx=three_transcript)
+        five_tx=five_transcript, three_tx=three_transcript,
+        five_genomic=five_genomic, three_genomic=three_genomic)
 
 
 async def healthz(request) -> PlainTextResponse:

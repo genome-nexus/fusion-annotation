@@ -199,8 +199,12 @@ with each parent segment reconstructed exactly from the fetched sequences.
 ## 6. Roadmap — extending toward production
 
 **Effect engine**
-- Handle intronic/mid-exon genomic breakpoints (not just exon boundaries) by
-  mapping genomic coordinates → CDS via the exon table already built.
+- ✅ Intronic/mid-exon genomic breakpoints (not just exon boundaries), mapped to a
+  CDS coordinate through the exon table via `cds_coord_at_genomic()`. A genomic
+  breakpoint pins the isoform, resolving the exon-numbering ambiguity that exon-only
+  input cannot express (issue #3, the CD74::ROS1 case). The resolved transcript is
+  echoed back per partner, and a known oncogenic pair that reconstructs out-of-frame
+  raises a transcript/exon re-check warning.
 - Non-canonical/all-transcript enumeration; report per-transcript frame status.
 - NMD prediction for out-of-frame/PTC-bearing junctions (55-nt-from-last-EJC rule).
 - 5′-partner retention of dimerization motifs (coiled-coil detection) as an

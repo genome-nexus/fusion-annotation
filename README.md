@@ -184,14 +184,49 @@ To use it from Claude.ai or Claude Desktop as a remote connector:
   "three_gene": "ALK",
   "five_exon": 13,
   "three_exon": 20,
+  "five_genomic": null,
+  "three_genomic": null,
   "five_transcript": null,
   "three_transcript": null,
   "species": "homo_sapiens"
 }
 ```
 
+Each partner's breakpoint may be given either as an **exon number**
+(`five_exon` / `three_exon`) or as a **genomic position** (`five_genomic` /
+`three_genomic` — an integer, a `"chr6:117324415"` form, or an HGVS `"g.117324415"`
+term). A genomic position pins the transcript isoform and removes exon-numbering
+ambiguity between overlapping isoforms; when both are supplied for a partner, the
+genomic position wins.
+
 The transcript fields are optional and default to each gene's canonical Ensembl
-transcript.
+transcript. The response echoes, under a `resolved` block, the transcript actually
+used for each partner and how each breakpoint was interpreted, and a `warnings`
+list flags a known oncogenic gene pair that reconstructs out-of-frame (usually a
+sign of a wrong exon number or isoform rather than a real frameshift):
+
+```json
+{
+  "resolved": {
+    "five":  {"gene": "EML4", "transcript": "ENST00000318522", "transcript_source": "canonical",
+              "breakpoint": {"type": "exon", "exon": 13, "cds_coord": 1489}},
+    "three": {"gene": "ALK",  "transcript": "ENST00000389048", "transcript_source": "canonical",
+              "breakpoint": {"type": "exon", "exon": 20, "cds_coord": 3173}}
+  },
+  "warnings": []
+}
+```
+
+#### Why genomic breakpoints? The CD74::ROS1 isoform trap
+
+An exon number alone cannot name an isoform. For `CD74::ROS1`, the longer CD74
+isoform `ENST00000009530` (p41-type, with an extra invariant-chain exon) numbers
+its exons differently from the canonical breakpoint, so *no* CD74 exon on that
+transcript reproduces the real fusion — the frame math is correct but computed for
+the wrong isoform. A genomic breakpoint sidesteps this: it only resolves against
+the transcript whose exon table actually spans it. Supply `five_genomic` /
+`three_genomic` (and, if you want, pin the transcripts explicitly) and the tool
+maps the coordinate to the exact CDS base on that isoform.
 
 ### The EML4::ALK worked example
 
@@ -244,9 +279,11 @@ pytest            # 11 offline assertions against the EML4::ALK truth values
 
 ### Status & roadmap
 
-v0.1 handles exon-boundary breakpoints on canonical transcripts. Planned: genomic
-(non-exon-boundary) breakpoints, all-transcript enumeration, NMD prediction,
-full VICC GFS JSON schema + GA4GH VRS/Cat-VRS identifiers, `hgvs` library round-trip
+v0.1 handles exon-boundary **and** genomic-coordinate breakpoints (the latter map
+through the exon table to an exact CDS base, pinning the isoform — see issue #3),
+echoes the resolved transcript per partner, and flags known oncogenic pairs that
+come back out-of-frame. Planned: all-transcript enumeration, NMD prediction, full
+VICC GFS JSON schema + GA4GH VRS/Cat-VRS identifiers, `hgvs` library round-trip
 validation, and a proper OncoKB backend. See docs/DESIGN.md §6.
 
 ### License
