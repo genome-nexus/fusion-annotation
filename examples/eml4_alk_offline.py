@@ -6,7 +6,9 @@ Run:  python examples/eml4_alk_offline.py
 import json
 import os
 
-from fusion_annotation import Transcript, build_exon_cds_map, annotate_fusion
+from fusion_annotation import (
+    Transcript, build_exon_cds_map, build_exon_genomic_map, annotate_fusion,
+)
 from fusion_annotation.providers import StaticProvider
 
 FIXTURE = os.path.join(os.path.dirname(__file__), os.pardir,
@@ -18,10 +20,13 @@ def load_provider():
     txs = {}
     for key, t in fx["transcripts"].items():
         exon_cds = build_exon_cds_map(t["strand"], t["exons"], t["cds_g_start"], t["cds_g_end"])
+        exon_genomic = build_exon_genomic_map(t["strand"], t["exons"])
         txs[key] = Transcript(
             gene_symbol=t["gene_symbol"], gene_id=t["gene_id"],
             transcript_id=t["transcript_id"], strand=t["strand"],
-            cds=t["cds"], protein=t["protein"], uniprot=t["uniprot"], exon_cds=exon_cds)
+            cds=t["cds"], protein=t["protein"], uniprot=t["uniprot"],
+            exon_cds=exon_cds, exon_genomic=exon_genomic,
+            cds_g_start=t["cds_g_start"], cds_g_end=t["cds_g_end"], is_canonical=True)
     return StaticProvider(txs, domains=fx["domains"], knowledge=fx["knowledge"])
 
 
@@ -33,6 +38,9 @@ def main():
     print("=== EML4::ALK variant 1 (E13;A20) ===\n")
     print("HGVS.p-like :", iface["hgvsp_like"])
     print("categorical :", iface["categorical_key"])
+    five, three = result["resolved"]["five"], result["resolved"]["three"]
+    print(f"transcripts : {five['gene']} {five['transcript']} ({five['transcript_source']}) :: "
+          f"{three['gene']} {three['transcript']} ({three['transcript_source']})")
     print(f"frame       : {iface['frame_status']}  "
           f"(protein {iface['fusion_length']} aa, internal stops {iface['internal_stops']})")
     print(f"junction    : {iface['five_gene']} Lys{iface['five_last_aa']} :: "

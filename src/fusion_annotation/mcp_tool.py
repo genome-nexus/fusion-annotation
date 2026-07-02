@@ -35,10 +35,11 @@ TOOL_NAME = "annotate_gene_fusion"
 
 TOOL_DESCRIPTION = (
     "Annotate a gene fusion at the protein level. Given a 5' and 3' partner gene and "
-    "the fused exon boundaries, reconstruct the chimeric protein (frame, junction, "
+    "the fused breakpoints, reconstruct the chimeric protein (frame, junction, "
     "hybrid codon, retained/lost domains), emit an HGVS.p-like junction string, and "
     "attach curated clinical knowledge (oncogenicity, therapies, evidence) for the "
-    "categorical gene-pair fusion."
+    "categorical gene-pair fusion. Breakpoints may be given as exon numbers or, to "
+    "pin the isoform unambiguously, as genomic positions."
 )
 
 TOOL_SCHEMA = {
@@ -49,28 +50,34 @@ TOOL_SCHEMA = {
         "properties": {
             "five_gene": {"type": "string", "description": "5' partner gene symbol, e.g. EML4"},
             "three_gene": {"type": "string", "description": "3' partner gene symbol, e.g. ALK"},
-            "five_exon": {"type": "integer", "description": "Last exon (1-based) contributed by the 5' partner"},
-            "three_exon": {"type": "integer", "description": "First exon (1-based) contributed by the 3' partner"},
-            "five_transcript": {"type": "string", "description": "Optional Ensembl transcript id for the 5' partner"},
+            "five_exon": {"type": "integer", "description": "Last exon (1-based) contributed by the 5' partner. Give this or five_genomic."},
+            "three_exon": {"type": "integer", "description": "First exon (1-based) contributed by the 3' partner. Give this or three_genomic."},
+            "five_genomic": {"type": "string", "description": "Genomic breakpoint on the 5' partner (int, 'chr6:117324415', or HGVS 'g.117324415'). Pins the isoform; preferred over five_exon when both are given."},
+            "three_genomic": {"type": "string", "description": "Genomic breakpoint on the 3' partner. Pins the isoform; preferred over three_exon when both are given."},
+            "five_transcript": {"type": "string", "description": "Optional Ensembl transcript id for the 5' partner (defaults to canonical; echoed back under resolved)"},
             "three_transcript": {"type": "string", "description": "Optional Ensembl transcript id for the 3' partner"},
         },
-        "required": ["five_gene", "three_gene", "five_exon", "three_exon"],
+        "required": ["five_gene", "three_gene"],
     },
 }
 
 
 def annotate_fusion_tool(mcp: Callable,
                          five_gene: str, three_gene: str,
-                         five_exon: int, three_exon: int,
+                         five_exon: Optional[int] = None, three_exon: Optional[int] = None,
                          five_transcript: Optional[str] = None,
                          three_transcript: Optional[str] = None,
+                         five_genomic=None, three_genomic=None,
                          species: str = "homo_sapiens") -> dict:
     """Backend for the MCP tool. `mcp` is a callable `mcp(server, method, **kwargs)`.
 
-    Returns the three-layer annotation dict: {"interface": ..., "knowledge": ...}.
+    Each partner's breakpoint is given as an exon number or a genomic position (the
+    latter pins the isoform). Returns the three-layer annotation dict:
+    {"interface": ..., "knowledge": ..., "resolved": ..., "warnings": ...}.
     """
     provider = MCPDataProvider(mcp, species=species)
     return annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,
-        five_tx=five_transcript, three_tx=three_transcript)
+        five_tx=five_transcript, three_tx=three_transcript,
+        five_genomic=five_genomic, three_genomic=three_genomic)
