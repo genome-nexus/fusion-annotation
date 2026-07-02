@@ -208,6 +208,34 @@ NSCLC driver. This package reproduces, from primary data:
 See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture and rationale (the
 domain-retention figure is shown at the top of this README).
 
+### A contrasting example: same gene pair, non-functional breakpoint
+
+Not every breakpoint within an oncogenic gene pair yields a functional fusion product.
+For example, `EML4::ALK` with `E13;A29` is predicted to be **frameshift-truncating**,
+and the critical ALK kinase domain is **not retained intact**:
+
+```text
+HGVS.p-like : EML4:p.Met1_Lys496::ALK:p.Asp1389_Pro1417  (junction hybrid codon -> Gly)
+categorical : EML4::ALK
+frame       : frameshift-truncating  (protein 526 aa, internal stops 0)
+
+retained domains:
+  [RETAINED] WD40 repeat (298-347)
+  [RETAINED] WD40 repeat (398-437)
+  [RETAINED] WD40 repeat (446-483)
+  [RETAINED] HELP motif (255-293)
+
+lost / disrupted critical ALK features:
+  [DISRUPTED] Protein kinase domain (1116-1392)
+  [LOST] Tyrosine-protein kinase, active site (1245-1257)
+  [LOST] Protein kinase, ATP binding site (1122-1150)
+```
+
+This is exactly why the package separates the **assayed** fusion effect (specific
+breakpoint, Layer 1) from the **categorical** gene-pair knowledge (Layer 3): the
+same `EML4::ALK` label can map to a clinically important driver breakpoint or to a
+protein product that is unlikely to be functional.
+
 ### Tests
 
 ```bash
