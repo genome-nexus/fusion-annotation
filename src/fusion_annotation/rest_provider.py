@@ -31,11 +31,38 @@ CIVIC_GRAPHQL = "https://civicdb.org/api/graphql"
 
 _UA = {"User-Agent": "fusion-annotation/0.1 (+https://github.com/genome-nexus/fusion-annotation)"}
 
+# Ensembl's REST API is noticeably less reliable from shared cloud NAT egress
+# IPs (Cloud Run, etc.) than from a residential/office IP — transient 500s,
+# 503s, and read timeouts are common even though the service is otherwise up.
+# Retry transient failures a few times with exponential backoff before giving
+# up; a 4xx (bad gene symbol, etc.) is a real error and is not retried.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_MAX_ATTEMPTS = 4
+_BACKOFF_BASE = 1.5  # seconds; attempt i waits _BACKOFF_BASE * 2**i
+
+
+def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
+    kwargs.setdefault("timeout", 30)
+    last_exc: Exception | None = None
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            r = requests.request(method, url, **kwargs)
+            if r.status_code in _RETRYABLE_STATUS and attempt < _MAX_ATTEMPTS - 1:
+                time.sleep(_BACKOFF_BASE * (2 ** attempt))
+                continue
+            r.raise_for_status()
+            return r
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            last_exc = e
+            if attempt < _MAX_ATTEMPTS - 1:
+                time.sleep(_BACKOFF_BASE * (2 ** attempt))
+                continue
+    raise last_exc if last_exc else RuntimeError(f"request to {url} failed after {_MAX_ATTEMPTS} attempts")
+
 
 def _ensembl_get(path: str, **params) -> dict:
     params.setdefault("content-type", "application/json")
-    r = requests.get(f"{ENSEMBL_BASE}{path}", params=params, headers=_UA, timeout=20)
-    r.raise_for_status()
+    r = _request_with_retry("GET", f"{ENSEMBL_BASE}{path}", params=params, headers=_UA)
     return r.json()
 
 
@@ -85,8 +112,7 @@ class RestDataProvider:
         out, url = [], f"{INTERPRO_BASE}/entry/interpro/protein/uniprot/{uniprot}"
         params = {"page_size": 100}
         while url:
-            r = requests.get(url, params=params, headers=_UA, timeout=20)
-            r.raise_for_status()
+            r = _request_with_retry("GET", url, params=params, headers=_UA)
             payload = r.json()
             for res in payload.get("results", []):
                 meta = res["metadata"]
@@ -114,9 +140,8 @@ class RestDataProvider:
                 nodes { id name }
               }
             }"""
-            r = requests.post(CIVIC_GRAPHQL, headers=headers, timeout=20,
-                               json={"query": mp_query, "variables": {"name": f"{five}::{three} Fusion"}})
-            r.raise_for_status()
+            r = _request_with_retry("POST", CIVIC_GRAPHQL, headers=headers,
+                                     json={"query": mp_query, "variables": {"name": f"{five}::{three} Fusion"}})
             nodes = r.json().get("data", {}).get("molecularProfiles", {}).get("nodes", [])
             mp = next((m for m in nodes if m.get("name", "").startswith(f"{five}::{three}")), None)
             if mp:
@@ -131,9 +156,8 @@ class RestDataProvider:
                     }
                   }
                 }"""
-                r = requests.post(CIVIC_GRAPHQL, headers=headers, timeout=20,
-                                   json={"query": ev_query, "variables": {"mpId": mp["id"]}})
-                r.raise_for_status()
+                r = _request_with_retry("POST", CIVIC_GRAPHQL, headers=headers,
+                                         json={"query": ev_query, "variables": {"mpId": mp["id"]}})
                 ev = r.json().get("data", {}).get("evidenceItems", {}).get("nodes", [])
                 thx, dis = set(), set()
                 for rec in ev:
