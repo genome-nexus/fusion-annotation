@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+from urllib.parse import urlparse
 
 from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
@@ -21,13 +22,32 @@ from mcp.server.transport_security import TransportSecuritySettings  # noqa: E40
 from fusion_annotation.core import annotate_fusion  # noqa: E402
 from fusion_annotation.rest_provider import RestDataProvider  # noqa: E402
 
+
+def normalize_allowed_host(entry: str) -> str:
+    """Extract a bare ``host[:port]`` from an allowlist entry.
+
+    Defensive against a full URL (scheme and/or path) being pasted in by
+    mistake -- e.g. "https://foo.run.app/mcp" instead of "foo.run.app" --
+    which would otherwise never string-match the bare Host header Starlette
+    sees on incoming requests and would silently reject 100% of legitimate
+    traffic with a 421 (this exact misconfiguration took the deployed server
+    down: FUSION_ANNOTATION_ALLOWED_HOSTS was set to the full MCP endpoint
+    URL instead of just its hostname).
+    """
+    s = entry.strip()
+    if "//" not in s:
+        s = "//" + s   # force urlparse to treat a bare "host[:port]" as a netloc, not a path
+    return urlparse(s).netloc or entry.strip()
+
+
 # Host header allowlist for the MCP transport's DNS-rebinding protection.
-# Set FUSION_ANNOTATION_ALLOWED_HOSTS to a comma-separated list (e.g. the
-# Cloud Run service hostname) in production. Defaults cover local testing
-# and leave the door open for any *.run.app hostname if unset.
+# Set FUSION_ANNOTATION_ALLOWED_HOSTS to a comma-separated list of bare
+# hostnames (e.g. the Cloud Run service hostname, NOT a full URL) in
+# production. Defaults cover local testing and leave the door open for any
+# *.run.app hostname if unset.
 _allowed_hosts_env = os.environ.get("FUSION_ANNOTATION_ALLOWED_HOSTS", "").strip()
 ALLOWED_HOSTS = (
-    [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
+    [normalize_allowed_host(h) for h in _allowed_hosts_env.split(",") if h.strip()]
     if _allowed_hosts_env else ["localhost", "127.0.0.1", "testserver"]
 )
 
