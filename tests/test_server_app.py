@@ -10,6 +10,12 @@ import sys
 
 import pytest
 
+# server/app.py pulls in the server extra (starlette, mcp, uvicorn), which isn't
+# installed for the zero-dep core test matrix — skip cleanly there. The dedicated
+# `test-server` CI job installs those deps so these assertions actually run.
+pytest.importorskip("starlette")
+pytest.importorskip("mcp")
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "server"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), os.pardir, "src"))
 
