@@ -25,6 +25,9 @@ dependencies = []
 test = ["pytest>=7"]
 mcp = []  # MCPDataProvider needs a host.mcp callable, injected at runtime.
 dev = ["pytest>=7", "ruff", "build"]
+# RestDataProvider + the standalone public MCP server (server/app.py) — talks
+# directly to Ensembl/InterPro/CIViC over HTTPS, no Claude Science dependency.
+server = ["requests>=2.31", "mcp>=1.9", "starlette>=0.37", "uvicorn>=0.30"]
 
 [project.urls]
 Homepage = "https://github.com/genome-nexus/fusion-annotation"
