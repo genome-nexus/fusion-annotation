@@ -38,17 +38,6 @@ IMAGE="$REGION-docker.pkg.dev/$PROJECT/$REPO/$SERVICE:latest"
 echo "== Building image via Cloud Build: $IMAGE =="
 gcloud builds submit --tag "$IMAGE" .
 
-# Generate (or reuse) the shared bearer token. Persisted locally in
-# server/.token so re-running this script doesn't rotate it accidentally.
-TOKEN_FILE="server/.token"
-if [ -f "$TOKEN_FILE" ]; then
-  TOKEN=$(cat "$TOKEN_FILE")
-else
-  TOKEN=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
-  echo "$TOKEN" > "$TOKEN_FILE"
-  echo "Generated a new bearer token -> $TOKEN_FILE (keep this out of git; .gitignore already covers server/.token)"
-fi
-
 echo "== First deploy pass (to learn the assigned *.run.app hostname) =="
 gcloud run deploy "$SERVICE" \
   --image "$IMAGE" \
@@ -58,7 +47,6 @@ gcloud run deploy "$SERVICE" \
   --min-instances=0 \
   --memory=512Mi \
   --cpu=1 \
-  --set-env-vars="FUSION_ANNOTATION_TOKEN=$TOKEN" \
   --quiet
 
 URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
@@ -74,9 +62,8 @@ echo ""
 echo "=================================================================="
 echo "Deployed:  $URL"
 echo "MCP endpoint:      $URL/mcp"
-echo "Health check:      $URL/healthz  (no auth required)"
-echo "Bearer token:       $(cat "$TOKEN_FILE")"
+echo "Health check:      $URL/healthz"
 echo ""
 echo "In Claude.ai / Claude Desktop: Settings -> Connectors -> Add custom"
-echo "connector -> URL: $URL/mcp, Authorization header: Bearer <token above>"
+echo "connector -> URL: $URL/mcp"
 echo "=================================================================="

@@ -163,6 +163,36 @@ uses these upstream servers:
 server framework, so an LLM agent can annotate a fusion in one call. See the module
 docstring for a FastMCP example.
 
+### Using the deployed MCP server
+
+A hosted copy of the server is live at:
+
+- MCP endpoint: `https://fusion-annotation-mcp-limbdx456q-uc.a.run.app/mcp`
+- Health check: `https://fusion-annotation-mcp-limbdx456q-uc.a.run.app/healthz`
+
+To use it from Claude.ai or Claude Desktop as a remote connector:
+
+1. Open **Settings → Connectors**.
+2. Add a **custom connector** with URL `https://fusion-annotation-mcp-limbdx456q-uc.a.run.app/mcp`.
+3. Connect, then call the `annotate_gene_fusion` tool.
+
+`annotate_gene_fusion` accepts:
+
+```json
+{
+  "five_gene": "EML4",
+  "three_gene": "ALK",
+  "five_exon": 13,
+  "three_exon": 20,
+  "five_transcript": null,
+  "three_transcript": null,
+  "species": "homo_sapiens"
+}
+```
+
+The transcript fields are optional and default to each gene's canonical Ensembl
+transcript.
+
 ### The EML4::ALK worked example
 
 `EML4::ALK` variant 1 (E13;A20) — EML4 exon 13 joined to ALK exon 20 — is the canonical
