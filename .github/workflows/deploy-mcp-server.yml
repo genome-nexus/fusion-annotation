@@ -1,0 +1,86 @@
+name: Deploy MCP server to Cloud Run
+
+# Manual trigger only — this hits your GCP project and (re)deploys the public
+# fusion-annotation MCP server, so it shouldn't fire on every push.
+on:
+  workflow_dispatch:
+    inputs:
+      allowed_hosts:
+        description: >-
+          Comma-separated hostnames for the MCP transport's DNS-rebinding
+          allowlist. Leave blank on the FIRST run (the Cloud Run hostname
+          doesn't exist yet); after that run finishes, copy the printed
+          service URL's hostname here and re-run to lock it down.
+        required: false
+        default: ""
+
+env:
+  GCP_PROJECT: fusion-annotation
+  GCP_REGION: us-central1
+  AR_REPO: fusion-annotation
+  SERVICE: fusion-annotation-mcp
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          gcloud artifacts repositories describe "${{ env.AR_REPO }}" \
+            --location="${{ env.GCP_REGION }}" --project="${{ env.GCP_PROJECT }}" \
+          || gcloud artifacts repositories create "${{ env.AR_REPO }}" \
+            --repository-format=docker --location="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT }}" \
+            --description="fusion-annotation MCP server images"
+
+      - name: Build and push image
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE }}:${{ github.sha }}"
+          docker build -f server/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          ENV_VARS="FUSION_ANNOTATION_TOKEN=${{ secrets.FUSION_ANNOTATION_TOKEN }}"
+          if [ -n "${{ inputs.allowed_hosts }}" ]; then
+            ENV_VARS="$ENV_VARS,FUSION_ANNOTATION_ALLOWED_HOSTS=${{ inputs.allowed_hosts }}"
+          fi
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE" \
+            --project "${{ env.GCP_PROJECT }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --allow-unauthenticated \
+            --max-instances=2 \
+            --min-instances=0 \
+            --memory=512Mi \
+            --cpu=1 \
+            --set-env-vars="$ENV_VARS" \
+            --quiet
+
+      - name: Print service URL
+        run: |
+          URL=$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.GCP_REGION }}" --project "${{ env.GCP_PROJECT }}" \
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+          echo "MCP endpoint: $URL/mcp"
+          echo "Health check: $URL/healthz"
+          echo "### Deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Service URL: $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- MCP endpoint: $URL/mcp" >> "$GITHUB_STEP_SUMMARY"
+          echo "- If this was the first run (no allowed_hosts input), re-run this workflow with allowed_hosts set to the hostname above to lock down DNS-rebinding protection." >> "$GITHUB_STEP_SUMMARY"
