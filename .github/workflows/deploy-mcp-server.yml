@@ -7,10 +7,12 @@ on:
     inputs:
       allowed_hosts:
         description: >-
-          Comma-separated hostnames for the MCP transport's DNS-rebinding
-          allowlist. Leave blank on the FIRST run (the Cloud Run hostname
-          doesn't exist yet); after that run finishes, copy the printed
-          service URL's hostname here and re-run to lock it down.
+          Comma-separated BARE hostnames (e.g. "foo-uc.a.run.app", NOT
+          "https://foo-uc.a.run.app/mcp" -- no scheme, no path) for the MCP
+          transport's DNS-rebinding allowlist. Leave blank on the FIRST run
+          (the Cloud Run hostname doesn't exist yet); after that run
+          finishes, copy the printed service URL's hostname here and re-run
+          to lock it down.
         required: false
         default: ""
 
@@ -71,10 +73,14 @@ jobs:
             --cpu=1 \
             --quiet
           if [ -n "$ENV_VARS" ]; then
+            # "^;^" makes gcloud split KEY=VALUE pairs on ";" instead of ",", so a
+            # comma-separated allowed_hosts value survives intact instead of being
+            # torn apart into bogus extra env vars (regressed by 0ee1185, which
+            # dropped this when moving to --update-env-vars; restored here).
             gcloud run services update "${{ env.SERVICE }}" \
               --project "${{ env.GCP_PROJECT }}" \
               --region "${{ env.GCP_REGION }}" \
-              --update-env-vars="$ENV_VARS" \
+              --update-env-vars="^;^$ENV_VARS" \
               --quiet
           fi
 
