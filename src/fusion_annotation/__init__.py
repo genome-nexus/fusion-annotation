@@ -15,18 +15,23 @@ from .core import (
     FusionKnowledge,
     DataProvider,
     build_exon_cds_map,
+    build_exon_genomic_map,
     cds_coord_at_exon_boundary,
+    cds_coord_at_genomic,
+    parse_genomic_breakpoint,
     annotate_effect,
     annotate_knowledge,
     annotate_fusion,
+    KNOWN_ONCOGENIC_PAIRS,
     translate,
     aa3,
 )
 
 __all__ = [
     "Transcript", "FusionProtein", "DomainCall", "FusionKnowledge",
-    "DataProvider", "build_exon_cds_map", "cds_coord_at_exon_boundary",
+    "DataProvider", "build_exon_cds_map", "build_exon_genomic_map",
+    "cds_coord_at_exon_boundary", "cds_coord_at_genomic", "parse_genomic_breakpoint",
     "annotate_effect", "annotate_knowledge", "annotate_fusion",
-    "translate", "aa3",
+    "KNOWN_ONCOGENIC_PAIRS", "translate", "aa3",
 ]
 __version__ = "0.1.0"

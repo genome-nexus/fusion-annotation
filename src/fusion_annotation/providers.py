@@ -17,7 +17,7 @@ Two implementations:
 """
 from __future__ import annotations
 from typing import Callable, Optional
-from .core import Transcript, build_exon_cds_map
+from .core import Transcript, build_exon_cds_map, build_exon_genomic_map
 
 
 class StaticProvider:
@@ -62,21 +62,26 @@ class MCPDataProvider:
         # Resolve a symbol to its canonical transcript, or accept a transcript id.
         rec = self.mcp("genomes", "ensembl_lookup", query=gene_or_tx,
                        species=self.species, expand=True)["record"]
+        # A transcript id was passed directly iff the caller did not name a gene symbol.
+        user_pinned_tx = gene_or_tx.upper().startswith("ENS")
         if rec.get("object_type") == "Gene" or "Transcript" in rec:
             # a gene was returned; descend to the canonical transcript
             tx_id = rec.get("canonical_transcript", "").split(".")[0]
             gene_id = rec["id"]
             gene_symbol = rec.get("display_name", gene_or_tx)
             rec = self.mcp("genomes", "ensembl_lookup", query=tx_id, expand=True)["record"]
+            is_canonical = True
         else:
             tx_id = rec["id"]
             gene_id = rec.get("Parent", "")
             gene_symbol = gene_or_tx
+            is_canonical = bool(rec.get("is_canonical")) if not user_pinned_tx else None
 
         tr = rec["Translation"]
         cds = self.mcp("genomes", "ensembl_sequence", stable_id=rec["id"], seq_type="cds")["seq"]
         prot = self.mcp("genomes", "ensembl_sequence", stable_id=rec["id"], seq_type="protein")["seq"]
         exon_cds = build_exon_cds_map(rec["strand"], rec["Exon"], tr["start"], tr["end"])
+        exon_genomic = build_exon_genomic_map(rec["strand"], rec["Exon"])
 
         # best-effort UniProt xref for the gene (for InterPro domains)
         uniprot = None
@@ -91,7 +96,9 @@ class MCPDataProvider:
 
         return Transcript(
             gene_symbol=gene_symbol, gene_id=gene_id, transcript_id=rec["id"],
-            strand=rec["strand"], cds=cds, protein=prot, uniprot=uniprot, exon_cds=exon_cds)
+            strand=rec["strand"], cds=cds, protein=prot, uniprot=uniprot,
+            exon_cds=exon_cds, exon_genomic=exon_genomic,
+            cds_g_start=tr["start"], cds_g_end=tr["end"], is_canonical=is_canonical)
 
     # ---- Layer 1: domains --------------------------------------------------
     def get_domains(self, uniprot: str) -> list[dict]:

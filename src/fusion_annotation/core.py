@@ -77,6 +77,13 @@ class Transcript:
     # exon_cds[i] = (cds_start, cds_end) 1-based inclusive for coding exon i (rank order);
     # non-coding exons omitted. Built by build_exon_cds_map().
     exon_cds: list[tuple[int, int]] = field(default_factory=list)
+    # Genomic structure, needed to map a genomic breakpoint -> CDS coord. Optional so
+    # exon-only callers/fixtures keep working; populated by build_exon_genomic_map().
+    # exon_genomic[i] = (g_lo, g_hi) for exon i, same rank order/index as exon_cds.
+    exon_genomic: list[tuple[int, int]] = field(default_factory=list)
+    cds_g_start: int = 0     # genomic CDS bounds (lo < hi), regardless of strand
+    cds_g_end: int = 0
+    is_canonical: Optional[bool] = None   # True if this is the gene's canonical/MANE transcript
 
     def cds_len(self) -> int:
         return len(self.cds)
@@ -110,6 +117,90 @@ def cds_coord_at_exon_boundary(exon_cds: list[tuple[int, int]], exon_rank: int,
     if (s, e) == (0, 0):
         raise ValueError(f"exon {exon_rank} is non-coding")
     return e if side == "end" else s
+
+
+def build_exon_genomic_map(strand: int, exons: list[dict]) -> list[tuple[int, int]]:
+    """Genomic (g_lo, g_hi) bounds per exon, in transcription order.
+
+    Same ordering and indexing (index == rank-1) as build_exon_cds_map(), so the
+    two lists line up. Kept separate from exon_cds so a genomic breakpoint can be
+    resolved to a CDS coordinate without re-fetching the transcript structure.
+    """
+    ordered = sorted(exons, key=lambda e: e["start"], reverse=(strand == -1))
+    return [(e["start"], e["end"]) for e in ordered]
+
+
+def cds_coord_at_genomic(strand: int, exon_genomic: list[tuple[int, int]],
+                         cds_g_start: int, cds_g_end: int,
+                         g_pos: int, side: Literal["end", "start"]) -> int:
+    """Map a genomic breakpoint to a 1-based CDS coordinate on this transcript.
+
+    Unlike an exon number, a genomic coordinate pins the isoform: it only resolves
+    against the transcript whose exon table actually spans it, which is exactly what
+    disambiguates overlapping isoforms with divergent exon numbering (see issue #3).
+
+    Parameters
+    ----------
+    exon_genomic : (g_lo, g_hi) per exon in transcription order (build_exon_genomic_map()).
+    cds_g_start / cds_g_end : genomic CDS bounds (lo < hi); UTR-only exon portions are ignored.
+    g_pos : genomic position of the breakpoint.
+    side : 'end'   -> last CDS base the 5' partner retains at/upstream of g_pos.
+           'start' -> first CDS base the 3' partner retains at/downstream of g_pos.
+
+    A breakpoint inside a coding exon maps to that exact base; a breakpoint in an
+    intron/UTR snaps to the nearest flanking coding-exon boundary in the relevant
+    direction. Raises ValueError if g_pos maps outside the coding region entirely.
+    """
+    if not exon_genomic:
+        raise ValueError("transcript has no genomic exon map; cannot resolve a genomic breakpoint "
+                         "(populate Transcript.exon_genomic via build_exon_genomic_map)")
+
+    def tc(g: int) -> int:                      # transcription coordinate (increases 5'->3')
+        return g if strand == 1 else -g
+
+    tp = tc(g_pos)
+    pos = 0
+    upstream_cds_end: Optional[int] = None      # cds_end of the last coding exon fully 5' of g_pos
+    for g_lo, g_hi in exon_genomic:
+        o_lo, o_hi = max(g_lo, cds_g_start), min(g_hi, cds_g_end)
+        clen = o_hi - o_lo + 1
+        if clen <= 0:                           # non-coding / UTR-only exon
+            continue
+        c_start, c_end = pos + 1, pos + clen
+        pos += clen
+        t_lo, t_hi = sorted((tc(o_lo), tc(o_hi)))
+        if t_lo <= tp <= t_hi:                  # breakpoint inside this coding exon
+            return c_start + (tp - t_lo)        # exact base (c_start is the 5' end of the exon)
+        if tp > t_hi:                           # exon lies entirely upstream (5') of g_pos
+            upstream_cds_end = c_end
+        elif side == "start":                   # first exon entirely downstream (3') of g_pos
+            return c_start
+    if side == "end" and upstream_cds_end is not None:
+        return upstream_cds_end
+    raise ValueError(f"genomic position {g_pos} does not map into the CDS of this transcript")
+
+
+def parse_genomic_breakpoint(value) -> int:
+    """Parse a genomic breakpoint into an integer position.
+
+    Accepts a plain int, a bare position string ("117324415"), a "chrom:pos" form
+    ("chr6:117324415" / "6:117324415"), or an HGVS genomic term ("g.117324415",
+    "chr6:g.117324415"). Only the 1-based genomic position is used — the transcript's
+    own strand/exon table supplies chromosome context — so the chromosome token, if
+    present, is accepted but not validated here.
+    """
+    if isinstance(value, int):
+        return value
+    s = str(value).strip()
+    if ":" in s:
+        s = s.rsplit(":", 1)[1].strip()
+    if s.lower().startswith("g."):
+        s = s[2:].strip()
+    s = s.replace(",", "").replace("_", "")
+    try:
+        return int(s)
+    except ValueError as exc:
+        raise ValueError(f"could not parse genomic breakpoint {value!r}") from exc
 
 
 # ----------------------------------------------------------------------------
@@ -271,23 +362,114 @@ def annotate_knowledge(fp: FusionProtein, provider: DataProvider) -> FusionKnowl
     return FusionKnowledge(categorical_key=fp.categorical_key(), **raw)
 
 
+# Curated gene pairs that are established oncogenic fusion drivers. Used only to
+# raise a sanity flag when such a pair reconstructs out-of-frame — an in-frame
+# driver that comes back frameshifted almost always means a wrong exon number or
+# transcript isoform was supplied (issue #3), not a real frameshift. Symbols are
+# order-independent (either partner may be 5' or 3').
+KNOWN_ONCOGENIC_PAIRS: frozenset[frozenset[str]] = frozenset({
+    frozenset({"EML4", "ALK"}), frozenset({"NPM1", "ALK"}),
+    frozenset({"LMNA", "NTRK1"}), frozenset({"CD74", "ROS1"}),
+    frozenset({"TPM3", "NTRK1"}), frozenset({"ETV6", "NTRK3"}),
+    frozenset({"KIF5B", "RET"}), frozenset({"CCDC6", "RET"}),
+    frozenset({"SLC34A2", "ROS1"}), frozenset({"BCR", "ABL1"}),
+    frozenset({"FGFR3", "TACC3"}), frozenset({"PAX8", "PPARG"}),
+})
+
+
+def _resolve_breakpoint(tx: Transcript, side: Literal["end", "start"],
+                        exon: Optional[int], genomic) -> tuple[int, dict]:
+    """Resolve a partner's breakpoint to a CDS coordinate, preferring genomic input.
+
+    Returns (cds_coord, provenance) where provenance records how it was derived so
+    the caller can echo it back to the user.
+    """
+    if genomic is not None:
+        g_pos = parse_genomic_breakpoint(genomic)
+        cds = cds_coord_at_genomic(tx.strand, tx.exon_genomic, tx.cds_g_start,
+                                   tx.cds_g_end, g_pos, side)
+        return cds, {"type": "genomic", "genomic_position": g_pos, "cds_coord": cds}
+    if exon is not None:
+        cds = cds_coord_at_exon_boundary(tx.exon_cds, exon, side)
+        return cds, {"type": "exon", "exon": exon, "cds_coord": cds}
+    raise ValueError(f"no breakpoint given for the {'5' if side == 'end' else '3'}' partner: "
+                     "supply an exon number or a genomic position")
+
+
 # ----------------------------------------------------------------------------
 # Orchestration: the full three-layer annotate() call.
 # ----------------------------------------------------------------------------
 def annotate_fusion(provider: DataProvider,
                     five_gene: str, three_gene: str,
-                    five_exon: int, three_exon: int,
-                    five_tx: Optional[str] = None, three_tx: Optional[str] = None
+                    five_exon: Optional[int] = None, three_exon: Optional[int] = None,
+                    five_tx: Optional[str] = None, three_tx: Optional[str] = None,
+                    five_genomic=None, three_genomic=None,
                     ) -> dict:
-    """End-to-end: resolve transcripts -> effect -> interface -> knowledge."""
+    """End-to-end: resolve transcripts -> effect -> interface -> knowledge.
+
+    Each partner's breakpoint may be given as an exon number (``five_exon`` /
+    ``three_exon``) or as a genomic position (``five_genomic`` / ``three_genomic``:
+    int, "chr6:117324415", or HGVS "g." form). A genomic breakpoint pins the isoform
+    and is preferred when both are supplied — this is what resolves the isoform
+    ambiguity described in issue #3. The resolved transcript ids and how each
+    breakpoint was interpreted are echoed back under ``resolved``; a ``warnings``
+    list flags a known oncogenic pair that reconstructs out-of-frame.
+    """
     five = provider.get_transcript(five_tx or five_gene)
     three = provider.get_transcript(three_tx or three_gene)
-    five_cds_end = cds_coord_at_exon_boundary(five.exon_cds, five_exon, "end")
-    three_cds_start = cds_coord_at_exon_boundary(three.exon_cds, three_exon, "start")
+
+    five_cds_end, five_bp = _resolve_breakpoint(five, "end", five_exon, five_genomic)
+    three_cds_start, three_bp = _resolve_breakpoint(three, "start", three_exon, three_genomic)
+
     dfive = provider.get_domains(five.uniprot) if five.uniprot else []
     dthree = provider.get_domains(three.uniprot) if three.uniprot else []
+
+    label_5 = f"g.{five_bp['genomic_position']}" if five_bp["type"] == "genomic" else f"E{five_exon}"
+    label_3 = f"g.{three_bp['genomic_position']}" if three_bp["type"] == "genomic" else f"A{three_exon}"
     fp = annotate_effect(five, three, five_cds_end, three_cds_start,
-                         breakpoint_label=f"E{five_exon};A{three_exon}",
+                         breakpoint_label=f"{label_5};{label_3}",
                          domains_five=dfive, domains_three=dthree)
     kn = annotate_knowledge(fp, provider)
-    return {"interface": fp.to_dict(), "knowledge": asdict(kn)}
+
+    resolved = {
+        "five": _echo_partner(five, five_tx, five_bp),
+        "three": _echo_partner(three, three_tx, three_bp),
+    }
+    warnings = _sanity_warnings(five_gene, three_gene, fp, kn)
+
+    return {"interface": fp.to_dict(), "knowledge": asdict(kn),
+            "resolved": resolved, "warnings": warnings}
+
+
+def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict) -> dict:
+    """Echo the transcript actually used and how it was selected, for caller transparency."""
+    if user_tx:
+        source = "user-specified"
+    elif tx.is_canonical:
+        source = "canonical"
+    elif tx.is_canonical is False:
+        source = "non-canonical"
+    else:
+        source = "provider-default"
+    return {
+        "gene": tx.gene_symbol,
+        "transcript": tx.transcript_id,
+        "transcript_source": source,
+        "breakpoint": breakpoint_prov,
+    }
+
+
+def _sanity_warnings(five_gene: str, three_gene: str,
+                     fp: FusionProtein, kn: "FusionKnowledge") -> list[str]:
+    """Flag a known oncogenic partner pair that reconstructs out-of-frame (issue #3)."""
+    warnings: list[str] = []
+    pair = frozenset({five_gene.upper(), three_gene.upper()})
+    known = pair in KNOWN_ONCOGENIC_PAIRS or bool(kn.oncogenic)
+    if known and fp.frame_status != "in-frame":
+        warnings.append(
+            f"{fp.categorical_key()} is a known oncogenic fusion pair but this breakpoint "
+            f"reconstructs as '{fp.frame_status}'. This often means the exon numbers or "
+            "transcript isoforms do not match the assayed breakpoint. Re-check the exon "
+            "numbers against the pinned transcripts, or supply genomic breakpoints "
+            "(five_genomic/three_genomic) to remove exon-numbering ambiguity between isoforms.")
+    return warnings
