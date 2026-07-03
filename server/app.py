@@ -122,24 +122,28 @@ def annotate_gene_fusion(
         five_genomic=five_genomic, three_genomic=three_genomic)
 
 
-async def healthz(request) -> PlainTextResponse:
+async def health(request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
 
 class HealthzMiddleware:
-    """Intercept /healthz before FastMCP's middleware stack sees it.
+    """Intercept /health before FastMCP's middleware stack sees it.
 
     FastMCP's DNS-rebinding protection and session manager run as ASGI
-    middleware around the inner app; appending /healthz to the inner router
+    middleware around the inner app; appending /health to the inner router
     means it gets caught by that middleware first and never reaches the route.
-    Wrapping at the ASGI level ensures /healthz is handled unconditionally.
+    Wrapping at the ASGI level ensures /health is handled unconditionally.
+
+    Note: Cloud Run intercepts GET /healthz at the infrastructure level and
+    returns a Google-branded 404 before the request reaches the container, so
+    we use /health instead.
     """
 
     def __init__(self, app):
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http" and scope.get("path", "").rstrip("/") == "/healthz":
+        if scope.get("type") == "http" and scope.get("path", "").rstrip("/") == "/health":
             await PlainTextResponse("ok")(scope, receive, send)
         else:
             await self.app(scope, receive, send)

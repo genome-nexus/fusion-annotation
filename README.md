@@ -183,7 +183,7 @@ docstring for a FastMCP example.
 A hosted copy of the server is live at:
 
 - MCP endpoint: `https://REDACTED.a.run.app/mcp`
-- Health check: `https://REDACTED.a.run.app/healthz`
+- Health check: `https://REDACTED.a.run.app/health`
 
 To use it from Claude.ai or Claude Desktop as a remote connector:
 
