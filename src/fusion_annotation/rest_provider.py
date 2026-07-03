@@ -46,12 +46,15 @@ CIVIC_GRAPHQL = "https://civicdb.org/api/graphql"
 _UA = {"User-Agent": "fusion-annotation/0.1 (+https://github.com/genome-nexus/fusion-annotation)"}
 
 
-def normalize_assembly(name: str) -> str:
+def normalize_assembly(name: str | None) -> str:
     """Normalize a genome-build name to a canonical 'GRCh38' / 'GRCh37'.
 
-    Accepts common aliases (hg38, hg19, "37", "38", any case). Raises ValueError
-    on anything unrecognized so a typo can't silently fall back to the wrong build.
+    Accepts common aliases (hg38, hg19, "37", "38", any case). Returns 'GRCh38'
+    for None or empty input. Raises ValueError on anything unrecognized so a typo
+    can't silently fall back to the wrong build.
     """
+    if not name:
+        return "GRCh38"
     key = str(name).strip().upper()
     if key not in _ASSEMBLY_ALIASES:
         raise ValueError(
