@@ -22,7 +22,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+test = ["pytest>=7", "requests>=2.31"]
 mcp = []  # MCPDataProvider needs a host.mcp callable, injected at runtime.
 dev = ["pytest>=7", "ruff", "build"]
 # RestDataProvider + the standalone public MCP server (server/app.py) — talks
