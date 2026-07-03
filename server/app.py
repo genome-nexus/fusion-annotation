@@ -81,6 +81,7 @@ def annotate_gene_fusion(
     three_genomic: int | str | None = None,
     five_transcript: str | None = None,
     three_transcript: str | None = None,
+    genome_build: str = "GRCh38",
     species: str = "homo_sapiens",
 ) -> dict:
     """Annotate a gene fusion at the protein level.
@@ -103,14 +104,19 @@ def annotate_gene_fusion(
         five_exon: last exon (1-based) contributed by the 5' partner.
         three_exon: first exon (1-based) contributed by the 3' partner.
         five_genomic: genomic breakpoint on the 5' partner — an int position, a
-            "chr6:117324415" form, or an HGVS "g.117324415" term.
+            "chr6:117324415" form, or an HGVS "g.117324415" term. Interpreted
+            against `genome_build`.
         three_genomic: genomic breakpoint on the 3' partner (same forms).
         five_transcript: optional Ensembl transcript id for the 5' partner
             (defaults to its canonical transcript; echoed back under ``resolved``).
         three_transcript: optional Ensembl transcript id for the 3' partner.
+        genome_build: human genome assembly the coordinates/transcripts come from
+            — "GRCh38" (default) or "GRCh37" (aliases hg38/hg19). Genomic
+            breakpoints MUST match this build; it is echoed back under
+            ``resolved.genome_build``.
         species: Ensembl species (default "homo_sapiens").
     """
-    provider = RestDataProvider(species=species)
+    provider = RestDataProvider(species=species, assembly=genome_build)
     return annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,

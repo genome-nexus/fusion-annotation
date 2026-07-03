@@ -25,11 +25,42 @@ import requests
 
 from .core import Transcript, build_exon_cds_map, build_exon_genomic_map
 
-ENSEMBL_BASE = "https://rest.ensembl.org"
+# Ensembl serves each human genome build from a different host. The default
+# rest.ensembl.org is GRCh38; GRCh37/hg19 has its own archive endpoint. A
+# genomic breakpoint is only meaningful against the build it was called on, so
+# the assembly must be selectable (see the `assembly` arg of RestDataProvider).
+ENSEMBL_BASE_GRCH38 = "https://rest.ensembl.org"
+ENSEMBL_BASE_GRCH37 = "https://grch37.rest.ensembl.org"
+ENSEMBL_BASE = ENSEMBL_BASE_GRCH38  # back-compat default
+
+_ASSEMBLY_BASES = {"GRCh38": ENSEMBL_BASE_GRCH38, "GRCh37": ENSEMBL_BASE_GRCH37}
+# Common spellings callers use for each build, normalized to our canonical key.
+_ASSEMBLY_ALIASES = {
+    "GRCH38": "GRCh38", "HG38": "GRCh38", "38": "GRCh38",
+    "GRCH37": "GRCh37", "HG19": "GRCh37", "37": "GRCh37",
+}
+
 INTERPRO_BASE = "https://www.ebi.ac.uk/interpro/api"
 CIVIC_GRAPHQL = "https://civicdb.org/api/graphql"
 
 _UA = {"User-Agent": "fusion-annotation/0.1 (+https://github.com/genome-nexus/fusion-annotation)"}
+
+
+def normalize_assembly(name: str | None) -> str:
+    """Normalize a genome-build name to a canonical 'GRCh38' / 'GRCh37'.
+
+    Accepts common aliases (hg38, hg19, "37", "38", any case). Returns 'GRCh38'
+    for None or empty input. Raises ValueError on anything unrecognized so a typo
+    can't silently fall back to the wrong build.
+    """
+    if not name:
+        return "GRCh38"
+    key = str(name).strip().upper()
+    if key not in _ASSEMBLY_ALIASES:
+        raise ValueError(
+            f"unknown genome build {name!r}; use 'GRCh38' (aliases: hg38) "
+            "or 'GRCh37' (aliases: hg19)")
+    return _ASSEMBLY_ALIASES[key]
 
 # Ensembl's REST API is noticeably less reliable from shared cloud NAT egress
 # IPs (Cloud Run, etc.) than from a residential/office IP — transient 500s,
@@ -60,29 +91,45 @@ def _request_with_retry(method: str, url: str, **kwargs) -> requests.Response:
     raise last_exc if last_exc else RuntimeError(f"request to {url} failed after {_MAX_ATTEMPTS} attempts")
 
 
-def _ensembl_get(path: str, **params) -> dict:
+def _ensembl_get(path: str, base: str = ENSEMBL_BASE, **params) -> dict:
     params.setdefault("content-type", "application/json")
-    r = _request_with_retry("GET", f"{ENSEMBL_BASE}{path}", params=params, headers=_UA)
+    r = _request_with_retry("GET", f"{base}{path}", params=params, headers=_UA)
     return r.json()
 
 
 class RestDataProvider:
-    """Live provider backed directly by public REST/GraphQL APIs (no MCP)."""
+    """Live provider backed directly by public REST/GraphQL APIs (no MCP).
 
-    def __init__(self, species: str = "homo_sapiens"):
+    Parameters
+    ----------
+    species : str
+        Ensembl species for symbol lookups.
+    assembly : str
+        Human genome build — 'GRCh38' (default) or 'GRCh37' (aliases hg38/hg19).
+        Selects which Ensembl REST host transcript structure and coordinates come
+        from; a genomic breakpoint is interpreted against THIS build, so it must
+        match the build the breakpoint was called on.
+    """
+
+    def __init__(self, species: str = "homo_sapiens", assembly: str = "GRCh38"):
         self.species = species
+        self.assembly = normalize_assembly(assembly)
+        self.ensembl_base = _ASSEMBLY_BASES[self.assembly]
 
     # ---- Layer 1 inputs: transcript structure + sequences -----------------
     def get_transcript(self, gene_or_tx: str) -> Transcript:
+        def eget(path: str, **params) -> dict:
+            return _ensembl_get(path, self.ensembl_base, **params)
+
         user_pinned_tx = gene_or_tx.upper().startswith("ENS")
-        rec = _ensembl_get(f"/lookup/id/{gene_or_tx}", expand=1) if user_pinned_tx \
-            else _ensembl_get(f"/lookup/symbol/{self.species}/{gene_or_tx}", expand=1)
+        rec = eget(f"/lookup/id/{gene_or_tx}", expand=1) if user_pinned_tx \
+            else eget(f"/lookup/symbol/{self.species}/{gene_or_tx}", expand=1)
 
         if rec.get("object_type") == "Gene":
             tx_id = rec["canonical_transcript"].split(".")[0]
             gene_id = rec["id"]
             gene_symbol = rec.get("display_name", gene_or_tx)
-            rec = _ensembl_get(f"/lookup/id/{tx_id}", expand=1)
+            rec = eget(f"/lookup/id/{tx_id}", expand=1)
             is_canonical = True
         else:
             # Reached only when a transcript id was passed directly (user-pinned);
@@ -93,14 +140,14 @@ class RestDataProvider:
             is_canonical = None
 
         tr = rec["Translation"]
-        cds = _ensembl_get(f"/sequence/id/{rec['id']}", type="cds")["seq"]
-        prot = _ensembl_get(f"/sequence/id/{rec['id']}", type="protein")["seq"]
+        cds = eget(f"/sequence/id/{rec['id']}", type="cds")["seq"]
+        prot = eget(f"/sequence/id/{rec['id']}", type="protein")["seq"]
         exon_cds = build_exon_cds_map(rec["strand"], rec["Exon"], tr["start"], tr["end"])
         exon_genomic = build_exon_genomic_map(rec["strand"], rec["Exon"])
 
         uniprot = None
         try:
-            xr = _ensembl_get(f"/xrefs/id/{gene_id or rec['id']}", external_db="Uniprot_gn")
+            xr = eget(f"/xrefs/id/{gene_id or rec['id']}", external_db="Uniprot_gn")
             ids = [x.get("primary_id") for x in xr if x.get("primary_id")]
             uniprot = next((i for i in ids if i and i[0] in "OPQ" and len(i) == 6), ids[0] if ids else None)
         except Exception:

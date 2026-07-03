@@ -51,11 +51,25 @@ class MCPDataProvider:
         ``host.mcp`` (or equivalent) with signature ``mcp(server, method, **kwargs)``.
     species : str
         Ensembl species for symbol lookups.
+    assembly : str
+        Human genome build. Only 'GRCh38' is supported here: the upstream
+        ``genomes`` MCP server is GRCh38, and there is no per-call build switch.
+        A non-GRCh38 request raises rather than silently returning GRCh38 data
+        under a GRCh37 label (which would be the exact silent-wrong-answer trap
+        that build selection is meant to prevent). Use ``RestDataProvider`` for
+        GRCh37.
     """
 
-    def __init__(self, mcp: Callable, species: str = "homo_sapiens"):
+    def __init__(self, mcp: Callable, species: str = "homo_sapiens",
+                 assembly: str = "GRCh38"):
+        assembly_val = assembly or "GRCh38"
+        if str(assembly_val).strip().upper() not in ("GRCH38", "HG38", "38"):
+            raise NotImplementedError(
+                f"MCPDataProvider only supports GRCh38, not {assembly!r}; "
+                "use RestDataProvider(assembly=...) for GRCh37.")
         self.mcp = mcp
         self.species = species
+        self.assembly = "GRCh38"
 
     # ---- Layer 1 inputs: transcript structure + sequences -----------------
     def get_transcript(self, gene_or_tx: str) -> Transcript:
