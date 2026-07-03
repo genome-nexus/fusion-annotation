@@ -1,9 +1,13 @@
 """Public MCP server for fusion-annotation.
 
 Exposes the single `annotate_gene_fusion` tool over the streamable-HTTP MCP
-transport, backed by `RestDataProvider` (direct calls to Ensembl, InterPro and
-CIViC — no Claude Science dependency). Designed to run as a container on
-Cloud Run and be added as a remote connector in Claude.ai / Claude Desktop.
+transport, backed by ``GenomeNexusDataProvider`` by default (Genome Nexus +
+UCSC + CIViC — no Ensembl REST, no Claude Science dependency, ~1–2 s
+per annotation). Set ``FUSION_ANNOTATION_PROVIDER=rest`` to fall back to the
+legacy Ensembl-backed ``RestDataProvider``.
+
+Designed to run as a container on Cloud Run and be added as a remote
+connector in Claude.ai / Claude Desktop.
 """
 from __future__ import annotations
 
@@ -28,9 +32,12 @@ def _make_provider(species: str, assembly: str):
     Reads ``FUSION_ANNOTATION_PROVIDER`` from the environment:
       - unset / "gn" / "genome_nexus" → GenomeNexusDataProvider (default, fast)
       - "rest" / "ensembl"            → RestDataProvider (fallback, slower)
+
+    Non-human species always use ``RestDataProvider`` because
+    ``GenomeNexusDataProvider`` only covers *Homo sapiens*.
     """
     backend = os.environ.get("FUSION_ANNOTATION_PROVIDER", "gn").strip().lower()
-    if backend in ("rest", "ensembl"):
+    if backend in ("rest", "ensembl") or (species or "").lower() not in ("homo_sapiens", "human"):
         return RestDataProvider(species=species, assembly=assembly)
     return GenomeNexusDataProvider(assembly=assembly)
 
@@ -126,7 +133,10 @@ def annotate_gene_fusion(
             — "GRCh38" (default) or "GRCh37" (aliases hg38/hg19). Genomic
             breakpoints MUST match this build; it is echoed back under
             ``resolved.genome_build``.
-        species: Ensembl species (default "homo_sapiens").
+        species: species identifier (default "homo_sapiens"). Currently only
+            human is supported by the default ``GenomeNexusDataProvider``; the
+            fallback ``RestDataProvider`` (``FUSION_ANNOTATION_PROVIDER=rest``)
+            forwards this to Ensembl REST.
     """
     provider = _make_provider(species=species, assembly=genome_build)
     return annotate_fusion(
