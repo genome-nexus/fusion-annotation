@@ -11,9 +11,7 @@ import os
 import sys
 from urllib.parse import urlparse
 
-from starlette.applications import Starlette
 from starlette.responses import PlainTextResponse
-from starlette.routing import Route
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
@@ -128,10 +126,27 @@ async def healthz(request) -> PlainTextResponse:
     return PlainTextResponse("ok")
 
 
-def build_app() -> Starlette:
-    inner = mcp.streamable_http_app()
-    inner.router.routes.append(Route("/healthz", healthz))
-    return inner
+class HealthzMiddleware:
+    """Intercept /healthz before FastMCP's middleware stack sees it.
+
+    FastMCP's DNS-rebinding protection and session manager run as ASGI
+    middleware around the inner app; appending /healthz to the inner router
+    means it gets caught by that middleware first and never reaches the route.
+    Wrapping at the ASGI level ensures /healthz is handled unconditionally.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http" and scope.get("path", "").rstrip("/") == "/healthz":
+            await PlainTextResponse("ok")(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
+def build_app():
+    return HealthzMiddleware(mcp.streamable_http_app())
 
 
 app = build_app()
