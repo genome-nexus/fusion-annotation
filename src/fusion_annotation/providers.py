@@ -62,7 +62,8 @@ class MCPDataProvider:
 
     def __init__(self, mcp: Callable, species: str = "homo_sapiens",
                  assembly: str = "GRCh38"):
-        if str(assembly).strip().upper() not in ("GRCH38", "HG38", "38"):
+        assembly_val = assembly or "GRCh38"
+        if str(assembly_val).strip().upper() not in ("GRCH38", "HG38", "38"):
             raise NotImplementedError(
                 f"MCPDataProvider only supports GRCh38, not {assembly!r}; "
                 "use RestDataProvider(assembly=...) for GRCh37.")

@@ -51,6 +51,8 @@ def test_resolved_echoes_provider_assembly():
 def test_mcp_provider_accepts_grch38():
     p = MCPDataProvider(lambda *a, **k: None, assembly="GRCh38")
     assert p.assembly == "GRCh38"
+    p2 = MCPDataProvider(lambda *a, **k: None, assembly=None)
+    assert p2.assembly == "GRCh38"
 
 
 @pytest.mark.parametrize("build", ["GRCh37", "hg19", "37"])
@@ -74,5 +76,7 @@ def test_rest_provider_build_selection():
     assert RestDataProvider(assembly="hg19").assembly == "GRCh37"
     assert RestDataProvider(assembly="grch38").assembly == "GRCh38"
     assert normalize_assembly("HG38") == "GRCh38"
+    assert normalize_assembly(None) == "GRCh38"
+    assert normalize_assembly("") == "GRCh38"
     with pytest.raises(ValueError):
         normalize_assembly("GRCh99")
