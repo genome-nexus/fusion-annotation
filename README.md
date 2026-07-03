@@ -132,10 +132,25 @@ print(result["interface"]["hgvsp_like"])
 # EML4:p.Met1_Lys496::ALK:p.Tyr1059_Pro1620  (junction hybrid codon -> Val)
 ```
 
-Run the bundled worked example:
+The same fusion can be specified by **genomic breakpoints** instead of exon
+numbers — the coordinate is mapped through the exon table to a CDS base, which
+pins the isoform (see [Why genomic breakpoints?](#why-genomic-breakpoints-the-cd74ros1-isoform-trap)):
+
+```python
+result = annotate_fusion(
+    provider, "EML4", "ALK",
+    five_genomic="chr2:42295516",   # 3' end of EML4 exon 13 (GRCh38)
+    three_genomic="chr2:29223528",  # 5' start of ALK exon 20 (GRCh38)
+)
+print(result["resolved"]["five"]["breakpoint"])
+# {'type': 'genomic', 'genomic_position': 42295516, 'cds_coord': 1489}
+```
+
+Run the bundled worked examples:
 
 ```bash
-python examples/eml4_alk_offline.py
+python examples/eml4_alk_offline.py           # exon-number breakpoints
+python examples/genomic_breakpoint_offline.py # genomic breakpoints
 ```
 
 ### Live annotation via MCP
@@ -198,6 +213,52 @@ Each partner's breakpoint may be given either as an **exon number**
 term). A genomic position pins the transcript isoform and removes exon-numbering
 ambiguity between overlapping isoforms; when both are supplied for a partner, the
 genomic position wins.
+
+**Example — the same EML4::ALK fusion, specified by genomic breakpoints** instead
+of exon numbers (GRCh38; both partners are on chr2). Any of the three coordinate
+forms below is accepted:
+
+```json
+{
+  "five_gene": "EML4",
+  "three_gene": "ALK",
+  "five_genomic": "chr2:42295516",
+  "three_genomic": "chr2:29223528"
+}
+```
+
+```json
+{
+  "five_gene": "EML4",
+  "three_gene": "ALK",
+  "five_genomic": 42295516,
+  "three_genomic": 29223528
+}
+```
+
+```json
+{
+  "five_gene": "EML4",
+  "three_gene": "ALK",
+  "five_genomic": "g.42295516",
+  "three_genomic": "g.29223528"
+}
+```
+
+All three resolve to the identical junction as the exon-number call
+(`five_exon: 13, three_exon: 20`) — `EML4:p.Met1_Lys496::ALK:p.Tyr1059_Pro1620`,
+in-frame — because `chr2:42295516` is the 3′ end of EML4 exon 13 and
+`chr2:29223528` is the 5′ start of ALK exon 20. To pin a specific isoform
+explicitly, add `five_transcript` / `three_transcript`.
+
+The bundled [`examples/genomic_breakpoint_offline.py`](examples/genomic_breakpoint_offline.py)
+runs this end-to-end offline and prints the resolved breakpoints:
+
+```text
+resolved (echoed back by the tool):
+  EML4  ENST00000318522 (canonical) -- genomic breakpoint g.42295516 -> CDS coord 1489
+  ALK   ENST00000389048 (canonical) -- genomic breakpoint g.29223528 -> CDS coord 3173
+```
 
 The transcript fields are optional and default to each gene's canonical Ensembl
 transcript. The response echoes, under a `resolved` block, the transcript actually
