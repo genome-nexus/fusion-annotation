@@ -31,3 +31,16 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip && pip install -e ".[test,server]"
       - run: pytest -v
+
+  # Public REST API: exercises api/app.py and its tests with the api extra
+  # installed. Separate job for the same reason as test-server (fastapi/slowapi
+  # aren't installed on the zero-dep core matrix).
+  test-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip && pip install -e ".[test,api]"
+      - run: pytest -v

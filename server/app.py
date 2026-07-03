@@ -22,24 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 from fusion_annotation.core import annotate_fusion  # noqa: E402
-from fusion_annotation.gn_provider import GenomeNexusDataProvider  # noqa: E402
-from fusion_annotation.rest_provider import RestDataProvider  # noqa: E402
-
-
-def _make_provider(species: str, assembly: str):
-    """Instantiate the configured data provider.
-
-    Reads ``FUSION_ANNOTATION_PROVIDER`` from the environment:
-      - unset / "gn" / "genome_nexus" → GenomeNexusDataProvider (default, fast)
-      - "rest" / "ensembl"            → RestDataProvider (fallback, slower)
-
-    Non-human species always use ``RestDataProvider`` because
-    ``GenomeNexusDataProvider`` only covers *Homo sapiens*.
-    """
-    backend = os.environ.get("FUSION_ANNOTATION_PROVIDER", "gn").strip().lower()
-    if backend in ("rest", "ensembl") or (species or "").lower() not in ("homo_sapiens", "human"):
-        return RestDataProvider(species=species, assembly=assembly)
-    return GenomeNexusDataProvider(assembly=assembly)
+from fusion_annotation.provider_factory import make_provider as _make_provider  # noqa: E402
 
 
 def normalize_allowed_host(entry: str) -> str:
