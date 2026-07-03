@@ -32,9 +32,12 @@ def _make_provider(species: str, assembly: str):
     Reads ``FUSION_ANNOTATION_PROVIDER`` from the environment:
       - unset / "gn" / "genome_nexus" → GenomeNexusDataProvider (default, fast)
       - "rest" / "ensembl"            → RestDataProvider (fallback, slower)
+
+    Non-human species always use ``RestDataProvider`` because
+    ``GenomeNexusDataProvider`` only covers *Homo sapiens*.
     """
     backend = os.environ.get("FUSION_ANNOTATION_PROVIDER", "gn").strip().lower()
-    if backend in ("rest", "ensembl"):
+    if backend in ("rest", "ensembl") or species.lower() not in ("homo_sapiens", "human"):
         return RestDataProvider(species=species, assembly=assembly)
     return GenomeNexusDataProvider(assembly=assembly)
 

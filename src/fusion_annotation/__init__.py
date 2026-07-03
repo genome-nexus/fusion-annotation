@@ -27,15 +27,11 @@ from .core import (
     aa3,
 )
 
-from .rest_provider import RestDataProvider
-from .gn_provider import GenomeNexusDataProvider
-
 __all__ = [
     "Transcript", "FusionProtein", "DomainCall", "FusionKnowledge",
     "DataProvider", "build_exon_cds_map", "build_exon_genomic_map",
     "cds_coord_at_exon_boundary", "cds_coord_at_genomic", "parse_genomic_breakpoint",
     "annotate_effect", "annotate_knowledge", "annotate_fusion",
     "KNOWN_ONCOGENIC_PAIRS", "translate", "aa3",
-    "RestDataProvider", "GenomeNexusDataProvider",
 ]
 __version__ = "0.1.0"
