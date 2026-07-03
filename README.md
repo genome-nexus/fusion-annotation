@@ -180,15 +180,17 @@ docstring for a FastMCP example.
 
 ### Using the deployed MCP server
 
-A hosted copy of the server is live at:
+A hosted copy of the server is live. To get the URL, check the latest
+[deploy workflow run](https://github.com/genome-nexus/fusion-annotation/actions/workflows/deploy-mcp-server.yml)
+or the Cloud Run console.
 
-- MCP endpoint: `https://REDACTED.a.run.app/mcp`
-- Health check: `https://REDACTED.a.run.app/health`
+- MCP endpoint: `https://<your-cloud-run-url>/mcp`
+- Health check: `https://<your-cloud-run-url>/health`
 
 To use it from Claude.ai or Claude Desktop as a remote connector:
 
 1. Open **Settings → Connectors**.
-2. Add a **custom connector** with URL `https://REDACTED.a.run.app/mcp`.
+2. Add a **custom connector** with URL `https://<your-cloud-run-url>/mcp`.
 3. Connect, then call the `annotate_gene_fusion` tool.
 
 `annotate_gene_fusion` accepts:

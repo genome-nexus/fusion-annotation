@@ -23,9 +23,9 @@ from app import normalize_allowed_host  # noqa: E402
 
 
 @pytest.mark.parametrize("entry,expected", [
-    ("REDACTED.a.run.app", "REDACTED.a.run.app"),
-    ("https://REDACTED.a.run.app/mcp",
-     "REDACTED.a.run.app"),
+    ("my-service-abc123.a.run.app", "my-service-abc123.a.run.app"),
+    ("https://my-service-abc123.a.run.app/mcp",
+     "my-service-abc123.a.run.app"),
     ("http://foo.run.app", "foo.run.app"),
     ("foo.run.app/mcp/", "foo.run.app"),
     ("localhost:8080", "localhost:8080"),

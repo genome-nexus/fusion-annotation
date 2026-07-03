@@ -7,8 +7,7 @@ name: Deploy MCP server on release
 # Required secrets:
 #   GCP_SA_KEY                      — service-account JSON with Cloud Run Admin +
 #                                     Artifact Registry Writer + Cloud Build Editor
-#   FUSION_ANNOTATION_ALLOWED_HOSTS — bare hostname(s) of the Cloud Run service,
-#                                     e.g. "REDACTED.a.run.app"
+#   FUSION_ANNOTATION_ALLOWED_HOSTS — bare hostname(s) of the Cloud Run service
 #                                     (same value printed by the manual deploy workflow).
 #                                     Leave the secret empty/absent to skip the
 #                                     DNS-rebinding allowlist update.
