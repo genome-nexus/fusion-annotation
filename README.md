@@ -63,6 +63,11 @@ A few notes on reading this:
   domain, active site, ATP-binding site, …) all come from different InterPro entries that
   describe overlapping or nested regions of the *same* ALK kinase — that redundancy is a
   property of the underlying domain database, not an error.
+- **Domain sources.** When using the deployed server (backed by `GenomeNexusDataProvider`),
+  domains come from GN's Pfam annotations as the primary source, enriched by InterPro
+  (on by default, gracefully degraded to `[]` + warning if unavailable). The offline
+  static example above uses hardcoded fixture data, so its domain list may differ
+  slightly from a live annotation.
 - The **therapies** line mixes evidence of different strength: `crizotinib`, `alectinib`,
   and `lorlatinib` are the guideline-recognized ALK inhibitors with curated clinical
   evidence for this fusion (from CIViC); the rest of the list comes from a broader,
@@ -90,9 +95,12 @@ Standards-aligned **gene-fusion annotation**: a protein-effect engine (VEP-like)
 a knowledge engine (OncoKB-like), joined by an **HGVS.p-like protein-level interface**.
 
 The core engine has **zero runtime dependencies** (Python stdlib only) and is fully
-offline-testable. Live annotation sources (Ensembl, InterPro, CIViC, Open Targets)
-are reached through a pluggable `DataProvider` — including an MCP-backed provider for
-agentic and [Genome Nexus](https://www.genomenexus.org/) / cBioPortal workflows.
+offline-testable. Live annotation sources are reached through a pluggable
+`DataProvider`. The default backend (`GenomeNexusDataProvider`) uses
+[Genome Nexus](https://www.genomenexus.org/) + UCSC + CIViC, reducing per-call
+latency from ~50–95 s (Ensembl REST) to **~1–2 s**. A legacy Ensembl-backed
+provider (`RestDataProvider`) is also available, as is an MCP-backed provider for
+agentic workflows.
 
 ### Why
 
@@ -160,7 +168,7 @@ python examples/genomic_breakpoint_offline.py # genomic breakpoints
 from fusion_annotation.providers import MCPDataProvider
 from fusion_annotation import annotate_fusion
 
-provider = MCPDataProvider(host.mcp)          # Ensembl + InterPro + CIViC
+provider = MCPDataProvider(host.mcp)          # MCP-host-backed provider (unchanged)
 result = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
 ```
 
@@ -170,6 +178,11 @@ uses these upstream servers:
 - **genomes** (Ensembl REST): `ensembl_lookup`, `ensembl_sequence`, `ensembl_xrefs`
 - **protein-annotation** (InterPro): `get_domain_architecture`
 - **clinical-genomics** (CIViC / Open Targets): `civic_search_molecular_profiles`, `civic_search_evidence`
+
+> **Note:** `MCPDataProvider` is a distinct mechanism from the deployed server's
+> provider backend. The deployed server defaults to `GenomeNexusDataProvider` (GN +
+> UCSC + CIViC); `MCPDataProvider` is for repl/agent contexts where an MCP host
+> mediates the upstream calls.
 
 ### As an MCP tool
 
@@ -186,6 +199,17 @@ or the Cloud Run console.
 
 - MCP endpoint: `https://<your-cloud-run-url>/mcp`
 - Health check: `https://<your-cloud-run-url>/health`
+
+**Backend.** The server defaults to `GenomeNexusDataProvider` (Genome Nexus + UCSC +
+CIViC), which reduces per-call latency from ~50–95 s to ~1–2 s. To use the legacy
+Ensembl-backed provider, set `FUSION_ANNOTATION_PROVIDER=rest` in the Cloud Run
+service environment.
+
+> **Note on canonical transcripts.** GN's canonical transcript can differ from
+> Ensembl's for some genes (confirmed: ROS1 uses `ENST00000368508` on GN vs
+> `ENST00000368507` on Ensembl). For isoform-sensitive fusions, pass
+> `five_genomic` / `three_genomic` breakpoints — or `five_transcript` /
+> `three_transcript` — to pin the exact isoform.
 
 To use it from Claude.ai or Claude Desktop as a remote connector:
 
@@ -350,7 +374,9 @@ protein product that is unlikely to be functional.
 ### Tests
 
 ```bash
-pytest            # 11 offline assertions against the EML4::ALK truth values
+pytest            # 69 tests: core effect engine, genomic-breakpoint mapping,
+                  #            GenomeNexusDataProvider (fixture-backed, no network),
+                  #            and MCP server
 ```
 
 ### Status & roadmap
