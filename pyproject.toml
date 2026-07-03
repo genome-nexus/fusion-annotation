@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fusion-annotation"
-version = "0.1.0"
+version = "0.2.0"
 description = "Standards-aligned gene-fusion annotation: protein effect (VEP-like) + knowledge (OncoKB-like) joined by an HGVS.p-like interface."
 readme = "README.md"
 requires-python = ">=3.9"
