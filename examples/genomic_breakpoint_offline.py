@@ -30,7 +30,8 @@ ALK_BREAKPOINT = "chr2:29223528"
 
 
 def load_provider():
-    fx = json.load(open(FIXTURE))
+    with open(FIXTURE, "r", encoding="utf-8") as f:
+        fx = json.load(f)
     txs = {}
     for key, t in fx["transcripts"].items():
         txs[key] = Transcript(
