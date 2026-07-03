@@ -115,6 +115,7 @@ class RestDataProvider:
         self.species = species
         self.assembly = normalize_assembly(assembly)
         self.ensembl_base = _ASSEMBLY_BASES[self.assembly]
+        self._domain_warning: str | None = None  # set by get_domains() on degradation
 
     # ---- Layer 1 inputs: transcript structure + sequences -----------------
     def get_transcript(self, gene_or_tx: str) -> Transcript:
@@ -166,8 +167,17 @@ class RestDataProvider:
         out, url = [], f"{INTERPRO_BASE}/entry/interpro/protein/uniprot/{uniprot}"
         params = {"page_size": 100}
         while url:
-            r = _request_with_retry("GET", url, params=params, headers=_UA)
-            payload = r.json()
+            try:
+                r = _request_with_retry("GET", url, params=params, headers=_UA)
+                payload = r.json()
+            except Exception:
+                # InterPro sometimes returns a non-JSON throttle page (HTTP 200
+                # with HTML), or a transient request failure after retries.
+                # Domains are enrichment — return what we have so far rather than
+                # aborting the whole annotation (see issue #9).
+                self._domain_warning = (
+                    f"domain annotation degraded (InterPro unreachable for {uniprot})")
+                break
             for res in payload.get("results", []):
                 meta = res["metadata"]
                 for prot_entry in res.get("proteins", []):

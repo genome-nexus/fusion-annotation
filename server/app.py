@@ -18,7 +18,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
 from fusion_annotation.core import annotate_fusion  # noqa: E402
+from fusion_annotation.gn_provider import GenomeNexusDataProvider  # noqa: E402
 from fusion_annotation.rest_provider import RestDataProvider  # noqa: E402
+
+
+def _make_provider(species: str, assembly: str):
+    """Instantiate the configured data provider.
+
+    Reads ``FUSION_ANNOTATION_PROVIDER`` from the environment:
+      - unset / "gn" / "genome_nexus" → GenomeNexusDataProvider (default, fast)
+      - "rest" / "ensembl"            → RestDataProvider (fallback, slower)
+    """
+    backend = os.environ.get("FUSION_ANNOTATION_PROVIDER", "gn").strip().lower()
+    if backend in ("rest", "ensembl"):
+        return RestDataProvider(species=species, assembly=assembly)
+    return GenomeNexusDataProvider(assembly=assembly)
 
 
 def normalize_allowed_host(entry: str) -> str:
@@ -114,7 +128,7 @@ def annotate_gene_fusion(
             ``resolved.genome_build``.
         species: Ensembl species (default "homo_sapiens").
     """
-    provider = RestDataProvider(species=species, assembly=genome_build)
+    provider = _make_provider(species=species, assembly=genome_build)
     return annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,

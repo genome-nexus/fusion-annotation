@@ -33,6 +33,7 @@ Standards references:
   - HGNC gene-fusion designation: GENE1::GENE2 with "::" separator.
 """
 from __future__ import annotations
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Protocol, Literal
 import json
@@ -415,8 +416,13 @@ def annotate_fusion(provider: DataProvider,
     breakpoint was interpreted are echoed back under ``resolved``; a ``warnings``
     list flags a known oncogenic pair that reconstructs out-of-frame.
     """
-    five = provider.get_transcript(five_tx or five_gene)
-    three = provider.get_transcript(three_tx or three_gene)
+    # Parallelise the two independent partner lookups (each may involve several
+    # network round-trips; doing them concurrently roughly halves this phase).
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        f_five = pool.submit(provider.get_transcript, five_tx or five_gene)
+        f_three = pool.submit(provider.get_transcript, three_tx or three_gene)
+        five = f_five.result()
+        three = f_three.result()
 
     five_cds_end, five_bp = _resolve_breakpoint(five, "end", five_exon, five_genomic)
     three_cds_start, three_bp = _resolve_breakpoint(three, "start", three_exon, three_genomic)
@@ -440,6 +446,11 @@ def annotate_fusion(provider: DataProvider,
     }
     both_genomic = five_bp["type"] == "genomic" and three_bp["type"] == "genomic"
     warnings = _sanity_warnings(five_gene, three_gene, fp, kn, both_genomic)
+    # Surface any domain-degradation warning set by the provider (e.g. InterPro
+    # throttle, GN Pfam unavailable).
+    domain_warn = getattr(provider, "_domain_warning", None)
+    if domain_warn:
+        warnings.append(domain_warn)
 
     return {"interface": fp.to_dict(), "knowledge": asdict(kn),
             "resolved": resolved, "warnings": warnings}
