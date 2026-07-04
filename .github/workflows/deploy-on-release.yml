@@ -225,10 +225,18 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Read package version
+        id: pkg_version
+        run: |
+          VERSION=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build (VITE_API_BASE_URL baked in at build time)
         working-directory: web
         env:
           VITE_API_BASE_URL: ${{ needs.deploy-api.outputs.url }}
+          VITE_APP_VERSION: ${{ steps.pkg_version.outputs.version }}
+          VITE_COMMIT_SHA: ${{ github.sha }}
         run: npm run build
 
       - name: Publish to gh-pages branch

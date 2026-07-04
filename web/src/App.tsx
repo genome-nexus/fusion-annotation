@@ -3,6 +3,7 @@ import "./App.css";
 import { ExampleFusions } from "./components/ExampleFusions";
 import { FusionForm } from "./components/FusionForm";
 import { ResultView } from "./components/ResultView";
+import { VersionFootnote } from "./components/VersionFootnote";
 import { annotateFusion, toSearchParams } from "./lib/api";
 import { DEFAULT_PARAMS } from "./lib/defaultParams";
 import type { AnnotateParams, AnnotationResult, ApiError } from "./lib/types";
@@ -101,6 +102,8 @@ function App() {
       )}
 
       {result && <ResultView result={result} permalink={permalink} />}
+
+      <VersionFootnote />
     </div>
   );
 }
