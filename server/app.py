@@ -11,6 +11,8 @@ connector in Claude.ai / Claude Desktop.
 """
 from __future__ import annotations
 
+import base64
+import logging
 import os
 import sys
 from urllib.parse import urlparse
@@ -21,8 +23,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 from mcp.server.transport_security import TransportSecuritySettings  # noqa: E402
+from mcp.types import CallToolResult, ImageContent, TextContent  # noqa: E402
 from fusion_annotation.core import annotate_fusion  # noqa: E402
 from fusion_annotation.provider_factory import make_provider as _make_provider  # noqa: E402
+
+log = logging.getLogger(__name__)
 
 
 def normalize_allowed_host(entry: str) -> str:
@@ -85,7 +90,8 @@ def annotate_gene_fusion(
     three_transcript: str | None = None,
     genome_build: str = "GRCh38",
     species: str = "homo_sapiens",
-) -> dict:
+    include_diagram: bool = True,
+) -> CallToolResult:
     """Annotate a gene fusion at the protein level.
 
     Given a 5' and 3' partner gene and the fused breakpoints, reconstruct the
@@ -120,13 +126,45 @@ def annotate_gene_fusion(
             human is supported by the default ``GenomeNexusDataProvider``; the
             fallback ``RestDataProvider`` (``FUSION_ANNOTATION_PROVIDER=rest``)
             forwards this to Ensembl REST.
+        include_diagram: if True (default), attach a rendered PNG diagram of
+            the 5' partner, 3' partner, and fusion protein domain tracks
+            (same rendering as docs/fusion_domain_map.png and the web UI's
+            domain diagram) alongside the JSON annotation. Set False to skip
+            rendering and get a text/structured-only response (faster, no
+            matplotlib import).
     """
     provider = _make_provider(species=species, assembly=genome_build)
-    return annotate_fusion(
+    result = annotate_fusion(
         provider, five_gene, three_gene,
         five_exon=five_exon, three_exon=three_exon,
         five_tx=five_transcript, three_tx=three_transcript,
         five_genomic=five_genomic, three_genomic=three_genomic)
+
+    content: list[TextContent | ImageContent] = [
+        TextContent(type="text", text=_json_dumps(result))
+    ]
+    if include_diagram:
+        try:
+            from fusion_annotation.domain_diagram import render_domain_diagram_png
+            png_bytes = render_domain_diagram_png(result)
+            content.append(ImageContent(
+                type="image",
+                data=base64.b64encode(png_bytes).decode("ascii"),
+                mimeType="image/png",
+            ))
+        except Exception:
+            # Diagram rendering is best-effort — never fail the whole tool
+            # call (e.g. missing matplotlib, or an unusual domain layout)
+            # just because the image couldn't be produced.
+            log.warning("domain diagram rendering failed for %s::%s", five_gene, three_gene,
+                        exc_info=True)
+
+    return CallToolResult(content=content, structuredContent=result)
+
+
+def _json_dumps(result: dict) -> str:
+    import json
+    return json.dumps(result, indent=2)
 
 
 async def health(request) -> PlainTextResponse:

@@ -20,6 +20,13 @@ const LABEL_ROW_HEIGHT = 14;
 const MARGIN = 16;
 const TRACK_TOP_PAD = 22;
 const TRACK_BOTTOM_PAD = 14;
+// Space reserved above the first track for its title text. The title is
+// drawn at a negative y offset relative to its own track group (see
+// ProteinTrack), so the diagram's starting y-offset must be tall enough
+// that the title's glyph ascenders don't get clipped by the SVG viewBox's
+// top edge (y=0) — a 12px/600-weight label needs ~17px of headroom above
+// its baseline.
+const TITLE_SPACE = 20;
 
 /** One protein track: a grey full-length backbone, colored domain rectangles
  * on top (color = domain category, opacity/border = retention status), a
@@ -156,7 +163,7 @@ export function DomainDiagram({
   const h1 = trackHeight(fiveDomains, fiveLength, true);
   const h2 = trackHeight(threeDomains, threeLength, true);
   const h3 = trackHeight(fusionDomains, fusionLength, false);
-  const y1 = 8;
+  const y1 = TITLE_SPACE;
   const y2 = y1 + h1;
   const y3 = y2 + h2;
   const totalHeight = y3 + h3;
