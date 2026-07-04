@@ -405,7 +405,7 @@ cd web && npm install && npm run dev   # proxies /api to localhost:8080
 
 Deploy the API manually to Cloud Run with `api/deploy.sh` (same pattern as
 `server/deploy.sh` for the MCP server); build+deploy the web UI manually with
-`cd web && npm run build`, publishing `dist/` to GitHub Pages. Or
+`cd web && npm run build`, publishing `dist/` to the `gh-pages` branch. Or
 automatically: every published GitHub Release triggers
 [`deploy-on-release.yml`](.github/workflows/deploy-on-release.yml), which
 builds and deploys all three (MCP server + API to Cloud Run, web UI to
@@ -419,6 +419,16 @@ manually. The deployed web UI lives at
 API's URL, check the latest
 [`deploy-on-release` workflow run](https://github.com/genome-nexus/fusion-annotation/actions/workflows/deploy-on-release.yml)
 or the Cloud Run console.
+
+The web UI is published via GitHub Pages' classic branch-based source
+(Settings → Pages → Source: "Deploy from a branch", pointed at `gh-pages`):
+the deploy job builds the SPA from whichever commit was released and pushes
+the built output straight into the `gh-pages` branch. This means the live
+site always reflects exactly what was last released — `main` can keep
+moving ahead with unreleased work without affecting production — and,
+unlike the GitHub-Actions-artifact Pages method, it isn't gated by a GitHub
+Environment deployment-branch policy (which only matches branches, not the
+tag ref that `release` events run on).
 
 ### Tests
 

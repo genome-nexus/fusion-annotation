@@ -44,9 +44,13 @@ Deployed to **GitHub Pages** (static hosting, no container) at
 (automatic on every published release) or
 [`deploy-api-web.yml`](../.github/workflows/deploy-api-web.yml) (manual
 trigger). Both build with `VITE_API_BASE_URL` set to the just-deployed API's
-Cloud Run URL, then publish `dist/` via `actions/deploy-pages`. `vite.config.ts`
-sets `base: '/fusion-annotation/'` for production builds specifically because
-Pages serves a project site under that subpath rather than at the domain root.
+Cloud Run URL, then publish `dist/` to the `gh-pages` branch (Pages' classic
+branch-based source — Settings → Pages → Source: "Deploy from a branch").
+That means the live site always reflects exactly the commit that was last
+released or manually redeployed, decoupled from wherever `main` has moved
+on to since. `vite.config.ts` sets `base: '/fusion-annotation/'` for
+production builds specifically because Pages serves a project site under
+that subpath rather than at the domain root.
 
 ## Permalinks
 

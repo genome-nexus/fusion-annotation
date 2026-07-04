@@ -11,8 +11,8 @@ name: Deploy API + Web
 # (https://genome-nexus.github.io) is fixed and known in advance, so
 # deploy-api locks the API's CORS allowlist to it directly on every run.
 #
-# Requires GitHub Pages enabled on the repo with source "GitHub Actions"
-# (Settings → Pages → Build and deployment → Source).
+# deploy-web-pages pushes the built SPA to the `gh-pages` branch (classic
+# branch-based Pages source configured under Settings → Pages).
 on:
   workflow_dispatch: {}
 
@@ -92,14 +92,9 @@ jobs:
     needs: deploy-api
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     concurrency:
-      group: pages
+      group: gh-pages
       cancel-in-progress: false
 
     steps:
@@ -121,18 +116,15 @@ jobs:
           VITE_API_BASE_URL: ${{ needs.deploy-api.outputs.url }}
         run: npm run build
 
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
+      - name: Publish to gh-pages branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: web/dist
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: web/dist
+          publish_branch: gh-pages
 
       - name: Summary
         run: |
           echo "### Web UI deployed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Page URL: ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Page URL: https://genome-nexus.github.io/fusion-annotation/" >> "$GITHUB_STEP_SUMMARY"
           echo "- Built against API: ${{ needs.deploy-api.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"
