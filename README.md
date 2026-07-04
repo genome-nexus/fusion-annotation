@@ -371,12 +371,46 @@ breakpoint, Layer 1) from the **categorical** gene-pair knowledge (Layer 3): the
 same `EML4::ALK` label can map to a clinically important driver breakpoint or to a
 protein product that is unlikely to be functional.
 
+### Web UI + REST API
+
+For a browser-based lookup (rather than the MCP transport above), two more
+components sit on top of the same core engine:
+
+- **`api/`** — a public FastAPI service (`api/app.py`). `GET /api/annotate`
+  accepts the same fields as `annotate_gene_fusion` (see above) as query
+  params — so the request URL itself is a shareable, stateless permalink;
+  reopening it just re-runs the annotation, nothing is persisted
+  server-side. `POST /api/annotate` accepts the same fields as a JSON body
+  for programmatic callers. Interactive OpenAPI docs are served at
+  `/api/docs`. Backed by the same `GenomeNexusDataProvider` /
+  `RestDataProvider` as the MCP server (`FUSION_ANNOTATION_PROVIDER` env var,
+  same convention). Unauthenticated by design, protected instead by per-IP
+  rate limiting (`FUSION_ANNOTATION_RATE_LIMIT`, default `30/minute`) and a
+  configurable CORS allowlist (`FUSION_ANNOTATION_CORS_ORIGINS`, default `*`).
+- **`web/`** — a React + TypeScript SPA (Vite) that calls `api/` for a
+  lookup form, an HGVS.p-like result summary, a domain-retention table, and
+  an interactive SVG domain diagram (the in-browser version of the figure at
+  the top of this README). The current lookup is always reflected in the URL
+  query string, so the address bar doubles as the permalink.
+
+Run both locally:
+
+```bash
+pip install -e ".[api]"
+python api/app.py                 # serves on :8080 by default
+
+cd web && npm install && npm run dev   # proxies /api to localhost:8080
+```
+
+Deploy either to Cloud Run with `api/deploy.sh` / `web/deploy.sh` (same
+pattern as `server/deploy.sh` for the MCP server).
+
 ### Tests
 
 ```bash
-pytest            # 69 tests: core effect engine, genomic-breakpoint mapping,
-                  #            GenomeNexusDataProvider (fixture-backed, no network),
-                  #            and MCP server
+pytest            # core effect engine, genomic-breakpoint mapping,
+                  #   GenomeNexusDataProvider (fixture-backed, no network),
+                  #   MCP server, and REST API (all offline/fixture-backed)
 ```
 
 ### Status & roadmap

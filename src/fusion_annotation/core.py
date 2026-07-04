@@ -215,6 +215,12 @@ class DomainCall:
     start: int
     end: int
     status: Literal["RETAINED", "LOST", "DISRUPTED"]
+    # Which fusion partner this domain call belongs to (the 5' or 3' gene
+    # symbol), and that partner's full-length protein size — both needed by
+    # UI consumers (e.g. web/) to lay out a two-track domain-retention
+    # diagram without re-deriving partner attribution from list order.
+    gene: str = ""
+    partner_protein_length: int = 0
 
 @dataclass
 class FusionProtein:
@@ -327,12 +333,14 @@ def annotate_effect(five: Transcript, three: Transcript,
         if d["end"] <= five_last_aa:              st = "RETAINED"
         elif d["start"] > five_last_aa:           st = "LOST"
         else:                                     st = "DISRUPTED"
-        dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st))
+        dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st,
+                                 gene=five.gene_symbol, partner_protein_length=len(five.protein)))
     for d in (domains_three or []):
         if d["start"] >= three_first_aa:          st = "RETAINED"
         elif d["end"] < three_first_aa:           st = "LOST"
         else:                                     st = "DISRUPTED"
-        dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st))
+        dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st,
+                                 gene=three.gene_symbol, partner_protein_length=len(three.protein)))
 
     return FusionProtein(
         five_gene=five.gene_symbol, three_gene=three.gene_symbol,
@@ -471,6 +479,11 @@ def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict)
         "transcript": tx.transcript_id,
         "transcript_source": source,
         "breakpoint": breakpoint_prov,
+        # Full-length (untruncated) protein size for this partner. Callers that
+        # need to lay out the whole parent protein (e.g. a domain-retention
+        # diagram) should read this rather than inferring it from the domains
+        # list, which is empty whenever a partner has no annotated domains.
+        "protein_length": len(tx.protein),
     }
 
 

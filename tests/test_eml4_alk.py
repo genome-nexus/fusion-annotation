@@ -108,6 +108,24 @@ def test_eml4_help_motif_retained(result):
     assert "help motif" in retained
 
 
+def test_domains_carry_partner_gene_and_length(result, provider):
+    """DomainCall.gene/partner_protein_length (added for the web UI's
+    two-track domain diagram, since a flat merged list otherwise gives no way
+    to tell which partner a domain came from) must be correctly attributed.
+    """
+    iface = result["interface"]
+    eml4_domains = [d for d in iface["domains"] if d["gene"] == "EML4"]
+    alk_domains = [d for d in iface["domains"] if d["gene"] == "ALK"]
+    assert eml4_domains and alk_domains
+    # every domain is attributed to exactly one of the two partner genes
+    assert len(eml4_domains) + len(alk_domains) == len(iface["domains"])
+    # partner_protein_length matches each partner's own full-length protein
+    assert all(d["partner_protein_length"] == len(provider.get_transcript("EML4").protein)
+               for d in eml4_domains)
+    assert all(d["partner_protein_length"] == len(provider.get_transcript("ALK").protein)
+               for d in alk_domains)
+
+
 # ---- Layer 3: knowledge (OncoKB-like, from fixture) ------------------------
 def test_knowledge_oncogenic_and_therapies(result):
     kn = result["knowledge"]

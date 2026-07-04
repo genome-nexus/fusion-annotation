@@ -111,6 +111,14 @@ def test_resolved_marks_user_specified_transcript(provider):
     assert r["resolved"]["five"]["transcript_source"] == "user-specified"
 
 
+def test_resolved_echoes_full_protein_length(provider):
+    # Needed by UI consumers (e.g. web/'s domain diagram) to lay out a
+    # partner's full-length backbone even when it has zero annotated domains.
+    r = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
+    assert r["resolved"]["five"]["protein_length"] == len(provider.get_transcript("EML4").protein)
+    assert r["resolved"]["three"]["protein_length"] == len(provider.get_transcript("ALK").protein)
+
+
 # ---- sanity flag on a known oncogenic pair --------------------------------
 def test_known_pair_out_of_frame_warns(provider):
     # E13;A29 is frameshift-truncating (see README) — a known driver pair coming
