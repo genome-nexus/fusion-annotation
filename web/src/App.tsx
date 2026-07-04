@@ -1,22 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import "./App.css";
+import { ExampleFusions } from "./components/ExampleFusions";
 import { FusionForm } from "./components/FusionForm";
 import { ResultView } from "./components/ResultView";
 import { annotateFusion, toSearchParams } from "./lib/api";
+import { DEFAULT_PARAMS } from "./lib/defaultParams";
 import type { AnnotateParams, AnnotationResult, ApiError } from "./lib/types";
-
-const DEFAULT_PARAMS: AnnotateParams = {
-  five_gene: "",
-  three_gene: "",
-  five_exon: "",
-  three_exon: "",
-  five_genomic: "",
-  three_genomic: "",
-  five_transcript: "",
-  three_transcript: "",
-  genome_build: "GRCh38",
-  species: "homo_sapiens",
-};
 
 /** Read the current URL's query string into AnnotateParams — the other half
  * of the stateless-permalink contract (writing happens in runAnnotation
@@ -100,6 +89,8 @@ function App() {
           clinical knowledge.
         </p>
       </header>
+
+      <ExampleFusions onSelect={runAnnotation} disabled={loading} />
 
       <FusionForm initial={formValues} onSubmit={runAnnotation} loading={loading} />
 

@@ -144,7 +144,8 @@ def test_cds_bounds_plus_strand():
         {"type": "five_prime_UTR", "start": 100, "end": 200, "strand": 1},
         {"type": "three_prime_UTR", "start": 500, "end": 600, "strand": 1},
     ]
-    lo, hi = _cds_bounds_from_utrs(utrs, strand=1)
+    exons = [{"exonStart": 100, "exonEnd": 600}]
+    lo, hi = _cds_bounds_from_utrs(utrs, strand=1, exons=exons)
     assert lo == 201
     assert hi == 499
 
@@ -155,9 +156,35 @@ def test_cds_bounds_minus_strand():
         {"type": "five_prime_UTR", "start": 500, "end": 600, "strand": -1},
         {"type": "three_prime_UTR", "start": 100, "end": 200, "strand": -1},
     ]
-    lo, hi = _cds_bounds_from_utrs(utrs, strand=-1)
+    exons = [{"exonStart": 100, "exonEnd": 600}]
+    lo, hi = _cds_bounds_from_utrs(utrs, strand=-1, exons=exons)
     assert lo == 201   # 3'UTR.end + 1 (lower coords)
     assert hi == 499   # 5'UTR.start - 1
+
+
+def test_cds_bounds_missing_three_prime_utr_falls_back_to_exon_bound():
+    # A CDS-incomplete transcript (no annotated stop codon) reports no
+    # three_prime_UTR at all — e.g. NTRK1's canonical ENST00000524377. The
+    # missing side should fall back to the outer exon boundary instead of
+    # crashing (regression test for a StopIteration bug).
+    utrs = [{"type": "five_prime_UTR", "start": 100, "end": 200, "strand": 1}]
+    exons = [{"exonStart": 100, "exonEnd": 600}, {"exonStart": 650, "exonEnd": 700}]
+    lo, hi = _cds_bounds_from_utrs(utrs, strand=1, exons=exons)
+    assert lo == 201
+    assert hi == 700
+
+
+def test_cds_bounds_missing_five_prime_utr_falls_back_to_exon_bound():
+    utrs = [{"type": "three_prime_UTR", "start": 500, "end": 600, "strand": 1}]
+    exons = [{"exonStart": 50, "exonEnd": 200}, {"exonStart": 250, "exonEnd": 600}]
+    lo, hi = _cds_bounds_from_utrs(utrs, strand=1, exons=exons)
+    assert lo == 50
+    assert hi == 499
+
+
+def test_cds_bounds_no_utrs_raises():
+    with pytest.raises(ValueError, match="no UTR records"):
+        _cds_bounds_from_utrs([], strand=1, exons=[{"exonStart": 1, "exonEnd": 10}])
 
 
 def test_pfam_to_domain_dicts():

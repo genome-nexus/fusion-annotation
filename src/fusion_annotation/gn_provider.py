@@ -146,18 +146,29 @@ def _gn_exon_to_dict(exon: dict) -> dict:
     return {"start": exon["exonStart"], "end": exon["exonEnd"]}
 
 
-def _cds_bounds_from_utrs(utrs: list[dict], strand: int) -> tuple[int, int]:
+def _cds_bounds_from_utrs(utrs: list[dict], strand: int, exons: list[dict]) -> tuple[int, int]:
     """Derive (cds_g_start, cds_g_end) lo<hi from GN UTR records and strand.
 
     On the plus strand the 5'UTR is at lower coords; on the minus strand the
     5'UTR is at higher coords.  Either way, cds_g_start < cds_g_end.
+
+    A transcript can be CDS-incomplete on one end (no annotated stop/start
+    codon, e.g. NTRK1's canonical ENST00000524377 has no three_prime_UTR at
+    all) — GN then simply omits that UTR record. When the UTR on a given
+    side is missing there's nothing to trim, so that boundary falls back to
+    the transcript's outermost exon coordinate on that side instead of
+    raising.
     """
-    five_utr = next(u for u in utrs if u["type"] == "five_prime_UTR")
-    three_utr = next(u for u in utrs if u["type"] == "three_prime_UTR")
-    # lo boundary: just past whichever UTR has the smaller end coordinate
-    lo = min(five_utr["end"], three_utr["end"]) + 1
-    # hi boundary: just before whichever UTR has the larger start coordinate
-    hi = max(five_utr["start"], three_utr["start"]) - 1
+    if not utrs:
+        raise ValueError("transcript has no UTR records; cannot derive CDS bounds.")
+    five_utr = next((u for u in utrs if u["type"] == "five_prime_UTR"), None)
+    three_utr = next((u for u in utrs if u["type"] == "three_prime_UTR"), None)
+    # Whichever UTR sits at the lower/higher genomic coordinates depends on
+    # strand: for +1, 5'UTR is lower and 3'UTR is higher; for -1, reversed.
+    lower_utr, higher_utr = (five_utr, three_utr) if strand != -1 else (three_utr, five_utr)
+
+    lo = (lower_utr["end"] + 1) if lower_utr else min(e["exonStart"] for e in exons)
+    hi = (higher_utr["start"] - 1) if higher_utr else max(e["exonEnd"] for e in exons)
     return lo, hi
 
 
@@ -275,11 +286,7 @@ class GenomeNexusDataProvider:
         """Fetch + assemble the CDS nucleotide sequence for a GN transcript."""
         strand = tx_data["exons"][0]["strand"]
         utrs = tx_data.get("utrs", [])
-        if not utrs:
-            raise ValueError(
-                f"GN transcript {tx_data.get('transcriptId')} has no UTR records; "
-                "cannot derive CDS bounds.")
-        cds_g_start, cds_g_end = _cds_bounds_from_utrs(utrs, strand)
+        cds_g_start, cds_g_end = _cds_bounds_from_utrs(utrs, strand, tx_data["exons"])
         span = cds_g_end - cds_g_start + 1
 
         chrom = self._resolve_chrom(gene_symbol)
@@ -311,7 +318,7 @@ class GenomeNexusDataProvider:
 
         strand = tx_data["exons"][0]["strand"]  # per-exon strand; top-level is null
         utrs = tx_data.get("utrs", [])
-        cds_g_start, cds_g_end = _cds_bounds_from_utrs(utrs, strand)
+        cds_g_start, cds_g_end = _cds_bounds_from_utrs(utrs, strand, tx_data["exons"])
 
         # Derive gene symbol (needed for chromosome lookup + Transcript.gene_symbol)
         if gene_or_tx.upper().startswith("ENST"):

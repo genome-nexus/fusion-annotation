@@ -16,6 +16,39 @@ header .tagline {
   margin-top: 0;
 }
 
+.examples-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.examples-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #495057;
+}
+
+.example-button {
+  background: #e7f5ff;
+  border: 1px solid #a5d8ff;
+  color: #1864ab;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.example-button:hover:not(:disabled) {
+  background: #d0ebff;
+}
+
+.example-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .fusion-form {
   display: flex;
   flex-direction: column;
