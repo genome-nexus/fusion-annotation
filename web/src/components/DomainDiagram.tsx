@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { canonicalizeDomains, colorFor, labelRows, type CanonDomain, type Status } from "../lib/domainDiagram";
 import type { DomainCall } from "../lib/types";
 
 interface Props {
@@ -9,65 +10,78 @@ interface Props {
   threeFirstAa: number;
   fiveLength: number;
   threeLength: number;
+  hybridCodon: boolean;
+  fusionLength: number;
 }
 
-const STATUS_COLOR: Record<string, string> = {
-  RETAINED: "#2f9e44",
-  LOST: "#adb5bd",
-  DISRUPTED: "#f08c00",
-};
-
 const TRACK_WIDTH = 640;
-const TRACK_HEIGHT = 26;
-const TRACK_GAP = 56;
+const TRACK_HEIGHT = 24;
+const LABEL_ROW_HEIGHT = 14;
 const MARGIN = 16;
+const TRACK_TOP_PAD = 22;
+const TRACK_BOTTOM_PAD = 14;
 
-/** One partner's protein track: a grey full-length backbone, colored domain
- * rectangles on top, and a junction marker at the breakpoint residue. */
+/** One protein track: a grey full-length backbone, colored domain rectangles
+ * on top (color = domain category, opacity/border = retention status), a
+ * junction marker at the breakpoint residue, and staggered domain labels. */
 function ProteinTrack({
   label,
   proteinLength,
   breakpointAa,
+  breakpointLabel,
   domains,
   y,
   onHover,
 }: {
   label: string;
   proteinLength: number;
-  breakpointAa: number;
-  domains: DomainCall[];
+  breakpointAa: number | null;
+  breakpointLabel?: string;
+  domains: CanonDomain[];
   y: number;
-  onHover: (d: DomainCall | null) => void;
+  onHover: (d: CanonDomain | null) => void;
 }) {
   const scale = (aa: number) => MARGIN + (aa / Math.max(proteinLength, 1)) * TRACK_WIDTH;
+  const rows = labelRows(domains, proteinLength);
+  const nRows = Math.max(0, ...rows.map((r) => r.row + 1));
+  const bodyY = TRACK_TOP_PAD + nRows * LABEL_ROW_HEIGHT;
 
   return (
     <g transform={`translate(0, ${y})`}>
-      <text x={MARGIN} y={-8} className="track-label">
+      <text x={MARGIN} y={-6} className="track-label">
         {label} <tspan className="track-sublabel">({proteinLength} aa)</tspan>
       </text>
+      {rows.map((r) => (
+        <text
+          key={`${r.name}-${r.center}`}
+          x={scale(r.center)}
+          y={bodyY - 4 - r.row * LABEL_ROW_HEIGHT}
+          className="domain-label"
+          textAnchor="middle"
+        >
+          {r.name}
+        </text>
+      ))}
       {/* backbone */}
-      <rect
-        x={MARGIN}
-        y={0}
-        width={TRACK_WIDTH}
-        height={TRACK_HEIGHT}
-        rx={4}
-        fill="#e9ecef"
-        stroke="#ced4da"
-      />
+      <rect x={MARGIN} y={bodyY} width={TRACK_WIDTH} height={TRACK_HEIGHT} rx={4}
+            fill="#e9ecef" stroke="#ced4da" />
       {domains.map((d) => {
         const x1 = scale(d.start);
         const x2 = scale(d.end);
+        const opacity = d.status === "RETAINED" ? 1 : d.status === "DISRUPTED" ? 0.85 : 0.35;
+        const dashed = d.status === "DISRUPTED";
         return (
           <rect
-            key={`${d.accession}-${d.start}-${d.end}`}
+            key={`${d.name}-${d.start}-${d.end}`}
             x={x1}
-            y={0}
+            y={bodyY}
             width={Math.max(x2 - x1, 1)}
             height={TRACK_HEIGHT}
-            fill={STATUS_COLOR[d.status] ?? "#495057"}
-            opacity={d.status === "LOST" ? 0.5 : 0.9}
+            fill={colorFor(d.name)}
+            fillOpacity={opacity}
+            stroke="#1a1a1a"
+            strokeWidth={0.75}
+            strokeDasharray={dashed ? "3,2" : undefined}
             onMouseEnter={() => onHover(d)}
             onMouseLeave={() => onHover(null)}
           >
@@ -77,22 +91,32 @@ function ProteinTrack({
           </rect>
         );
       })}
-      {/* junction marker */}
-      <line
-        x1={scale(breakpointAa)}
-        x2={scale(breakpointAa)}
-        y1={-4}
-        y2={TRACK_HEIGHT + 4}
-        stroke="#e03131"
-        strokeWidth={2}
-      />
+      {breakpointAa != null && (
+        <>
+          <line x1={scale(breakpointAa)} x2={scale(breakpointAa)} y1={bodyY - 6} y2={bodyY + TRACK_HEIGHT + 6}
+                stroke="#e03131" strokeWidth={2} strokeDasharray="4,3" />
+          {breakpointLabel && (
+            <text x={scale(breakpointAa)} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
+                  textAnchor="middle">
+              {breakpointLabel}
+            </text>
+          )}
+        </>
+      )}
     </g>
   );
 }
 
+function trackHeight(domains: CanonDomain[], proteinLength: number, hasBreakpointLabel: boolean) {
+  const rows = labelRows(domains, proteinLength);
+  const nRows = Math.max(0, ...rows.map((r) => r.row + 1));
+  return TRACK_TOP_PAD + nRows * LABEL_ROW_HEIGHT + TRACK_HEIGHT + TRACK_BOTTOM_PAD + (hasBreakpointLabel ? 6 : 0);
+}
+
 /** Interactive SVG domain-retention diagram — the in-browser equivalent of
- * docs/fusion_domain_map.png: one track per partner, domains colored by
- * retained/lost/disrupted status, with the breakpoint marked on each. */
+ * docs/fusion_domain_map.png: one track each for the 5' partner, the 3'
+ * partner, and the fused protein itself, with domains colored consistently
+ * by category everywhere and retention status shown via opacity/dashing. */
 export function DomainDiagram({
   domains,
   fiveGene,
@@ -101,43 +125,85 @@ export function DomainDiagram({
   threeFirstAa,
   fiveLength,
   threeLength,
+  hybridCodon,
+  fusionLength,
 }: Props) {
-  const [hovered, setHovered] = useState<DomainCall | null>(null);
-  const fiveDomains = domains.filter((d) => d.gene === fiveGene);
-  const threeDomains = domains.filter((d) => d.gene === threeGene);
+  const [hovered, setHovered] = useState<CanonDomain | null>(null);
 
-  const height = TRACK_GAP * 2 + 20;
+  const fiveDomains = canonicalizeDomains(domains, fiveGene);
+  const threeDomains = canonicalizeDomains(domains, threeGene);
+
+  // Fusion-protein track: remap each partner's domains onto fusion
+  // coordinates. 5' domains keep their original numbering (unchanged up to
+  // the breakpoint); 3' domains shift by a constant offset derived from the
+  // junction. Only domains that actually survive into the fusion protein are
+  // shown — LOST domains are, by definition, entirely absent from it.
+  const threeOffset = fiveLastAa + (hybridCodon ? 1 : 0) - threeFirstAa + 1;
+  const fusionDomains: CanonDomain[] = [
+    ...fiveDomains
+      .filter((d) => d.status !== "LOST")
+      .map((d) => ({ ...d, end: Math.min(d.end, fiveLastAa) })),
+    ...threeDomains
+      .filter((d) => d.status !== "LOST")
+      .map((d) => ({
+        name: d.name,
+        status: "RETAINED" as Status,
+        start: Math.max(d.start, threeFirstAa) + threeOffset,
+        end: d.end + threeOffset,
+      })),
+  ].sort((a, b) => a.start - b.start);
+
+  const h1 = trackHeight(fiveDomains, fiveLength, true);
+  const h2 = trackHeight(threeDomains, threeLength, true);
+  const h3 = trackHeight(fusionDomains, fusionLength, false);
+  const y1 = 8;
+  const y2 = y1 + h1;
+  const y3 = y2 + h2;
+  const totalHeight = y3 + h3;
 
   return (
     <div className="domain-diagram">
-      <svg viewBox={`0 0 ${TRACK_WIDTH + MARGIN * 2} ${height}`} width="100%" role="img"
+      <svg viewBox={`0 0 ${TRACK_WIDTH + MARGIN * 2} ${totalHeight}`} width="100%" role="img"
            aria-label="Domain retention diagram">
         <ProteinTrack
           label={fiveGene}
           proteinLength={fiveLength}
           breakpointAa={fiveLastAa}
+          breakpointLabel={`breakpoint aa ${fiveLastAa}`}
           domains={fiveDomains}
-          y={24}
+          y={y1}
           onHover={setHovered}
         />
         <ProteinTrack
           label={threeGene}
           proteinLength={threeLength}
           breakpointAa={threeFirstAa}
+          breakpointLabel={`breakpoint aa ${threeFirstAa}`}
           domains={threeDomains}
-          y={24 + TRACK_GAP}
+          y={y2}
+          onHover={setHovered}
+        />
+        <ProteinTrack
+          label={`${fiveGene}::${threeGene} fusion protein`}
+          proteinLength={fusionLength}
+          breakpointAa={fiveLastAa}
+          domains={fusionDomains}
+          y={y3}
           onHover={setHovered}
         />
       </svg>
       <div className="domain-legend">
-        <span><i style={{ background: STATUS_COLOR.RETAINED }} /> Retained</span>
-        <span><i style={{ background: STATUS_COLOR.DISRUPTED }} /> Disrupted</span>
-        <span><i style={{ background: STATUS_COLOR.LOST, opacity: 0.5 }} /> Lost</span>
+        <span><i style={{ background: "#2f9e44" }} /> WD40 / β-propeller</span>
+        <span><i style={{ background: "#e8590c" }} /> Kinase</span>
+        <span><i style={{ background: "#0c8599" }} /> HELP</span>
+        <span><i style={{ background: "#1971c2" }} /> MAM domain</span>
+        <span><i style={{ background: "#495057" }} /> Other (stable per-name color)</span>
+        <span className="legend-note">Retained = solid · Disrupted = dashed border, 85% opacity · Lost = 35% opacity</span>
         <span><i className="junction-swatch" /> Breakpoint</span>
       </div>
       {hovered && (
         <div className="domain-tooltip">
-          <strong>{hovered.name}</strong> ({hovered.gene} {hovered.start}-{hovered.end}) — {hovered.status}
+          <strong>{hovered.name}</strong> ({hovered.start}-{hovered.end}) — {hovered.status}
         </div>
       )}
     </div>

@@ -65,6 +65,8 @@ export function ResultView({ result, permalink }: Props) {
         threeFirstAa={iface.three_first_aa}
         fiveLength={resolved.five.protein_length}
         threeLength={resolved.three.protein_length}
+        hybridCodon={iface.hybrid_codon}
+        fusionLength={iface.fusion_length}
       />
 
       <table className="domain-table">

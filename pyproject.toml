@@ -28,6 +28,9 @@ dependencies = []
 test = ["pytest>=7", "requests>=2.31", "httpx>=0.27"]
 mcp = []  # MCPDataProvider needs a host.mcp callable, injected at runtime.
 dev = ["pytest>=7", "ruff", "build"]
+# matplotlib is only needed to regenerate docs/fusion_domain_map.png via
+# docs/generate_domain_map.py — not a runtime dependency of the library.
+docs = ["matplotlib>=3.7"]
 # RestDataProvider + the standalone public MCP server (server/app.py) — talks
 # directly to Ensembl/InterPro/CIViC over HTTPS, no Claude Science dependency.
 server = ["requests>=2.31", "mcp>=1.9", "starlette>=0.37", "uvicorn>=0.30"]

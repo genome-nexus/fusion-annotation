@@ -199,12 +199,29 @@ header .tagline {
   fill: #868e96;
 }
 
+.domain-label {
+  font-size: 9px;
+  fill: #212529;
+}
+
+.breakpoint-label {
+  font-size: 10px;
+  font-weight: 600;
+  fill: #e03131;
+}
+
 .domain-legend {
   display: flex;
   gap: 16px;
   font-size: 0.8rem;
   margin-top: 8px;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.domain-legend .legend-note {
+  color: #868e96;
+  font-size: 0.75rem;
 }
 
 .domain-legend span {

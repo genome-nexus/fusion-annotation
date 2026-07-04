@@ -27,6 +27,11 @@ The output is a short, human-readable line describing the fusion protein — for
 
 ![EML4::ALK chimeric protein and domain retention](docs/fusion_domain_map.png)
 
+<sub>Regenerate this figure with `pip install -e .[docs] && python docs/generate_domain_map.py`.
+The web UI's domain diagram uses the same domain de-duplication and category-color scheme
+(see `docs/generate_domain_map.py` and `web/src/components/DomainDiagram.tsx`), so a given
+domain (e.g. the ALK kinase domain) always renders in the same color everywhere.</sub>
+
 **Here is the tool's full output for this example** — no installation needed to read it,
 this is exactly what running the bundled example prints:
 
