@@ -402,8 +402,18 @@ python api/app.py                 # serves on :8080 by default
 cd web && npm install && npm run dev   # proxies /api to localhost:8080
 ```
 
-Deploy either to Cloud Run with `api/deploy.sh` / `web/deploy.sh` (same
-pattern as `server/deploy.sh` for the MCP server).
+Deploy either manually to Cloud Run with `api/deploy.sh` / `web/deploy.sh`
+(same pattern as `server/deploy.sh` for the MCP server), or automatically:
+every published GitHub Release triggers
+[`deploy-on-release.yml`](.github/workflows/deploy-on-release.yml), which
+builds and deploys all three services (MCP server, API, web UI) — the API's
+URL is baked into the web build, and the API's CORS allowlist is then locked
+down to the deployed web UI's real origin. For an ad-hoc redeploy between
+releases (e.g. to pick up a CORS/config change), trigger
+[`deploy-api-web.yml`](.github/workflows/deploy-api-web.yml) manually. To
+find the deployed API/web URLs, check the latest
+[`deploy-on-release` workflow run](https://github.com/genome-nexus/fusion-annotation/actions/workflows/deploy-on-release.yml)
+or the Cloud Run console.
 
 ### Tests
 

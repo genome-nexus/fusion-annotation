@@ -1,0 +1,155 @@
+name: Deploy API + Web to Cloud Run
+
+# Manual trigger only — this hits your GCP project and (re)deploys the public
+# fusion-annotation REST API and web UI, so it shouldn't fire on every push.
+# Mirrors deploy-mcp-server.yml's manual-trigger pattern; use this to test a
+# deploy or fix CORS/config between releases without cutting a new release.
+#
+# api/ and web/ have an ordering dependency: the web SPA bakes the API's URL
+# into its JS bundle at *build* time (Vite), so deploy-web needs deploy-api's
+# URL first; the API's CORS allowlist is locked down to the SPA's real origin
+# only after web/ is deployed (same flow as api/deploy.sh + web/deploy.sh).
+on:
+  workflow_dispatch: {}
+
+env:
+  GCP_PROJECT: fusion-annotation
+  GCP_REGION: us-central1
+  AR_REPO: fusion-annotation
+
+jobs:
+  deploy-api:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SERVICE: fusion-annotation-api
+    outputs:
+      url: ${{ steps.url.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          gcloud artifacts repositories describe "${{ env.AR_REPO }}" \
+            --location="${{ env.GCP_REGION }}" --project="${{ env.GCP_PROJECT }}" \
+          || gcloud artifacts repositories create "${{ env.AR_REPO }}" \
+            --repository-format=docker --location="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT }}" \
+            --description="fusion-annotation container images"
+
+      - name: Build and push image
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE }}:${{ github.sha }}"
+          docker build -f api/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          # CORS is left at its current value here (defaults to "*" on the
+          # very first-ever deploy); deploy-web locks it down to the SPA's
+          # real origin once that's known.
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE" \
+            --project "${{ env.GCP_PROJECT }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --allow-unauthenticated \
+            --max-instances=2 \
+            --min-instances=0 \
+            --memory=512Mi \
+            --cpu=1 \
+            --quiet
+
+      - name: Print service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.GCP_REGION }}" --project "${{ env.GCP_PROJECT }}" \
+            --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Service URL: $URL"
+          echo "### API deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Service URL: $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API docs: $URL/api/docs" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-web:
+    needs: deploy-api
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      SERVICE: fusion-annotation-web
+      API_SERVICE: fusion-annotation-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          gcloud artifacts repositories describe "${{ env.AR_REPO }}" \
+            --location="${{ env.GCP_REGION }}" --project="${{ env.GCP_PROJECT }}" \
+          || gcloud artifacts repositories create "${{ env.AR_REPO }}" \
+            --repository-format=docker --location="${{ env.GCP_REGION }}" \
+            --project="${{ env.GCP_PROJECT }}" \
+            --description="fusion-annotation container images"
+
+      - name: Build and push image
+        env:
+          API_URL: ${{ needs.deploy-api.outputs.url }}
+        run: |
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE }}:${{ github.sha }}"
+          docker build -f web/Dockerfile --build-arg "VITE_API_BASE_URL=$API_URL" -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${{ env.SERVICE }}" \
+            --image "$IMAGE" \
+            --project "${{ env.GCP_PROJECT }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --allow-unauthenticated \
+            --max-instances=2 \
+            --min-instances=0 \
+            --memory=256Mi \
+            --cpu=1 \
+            --quiet
+
+      - name: Print service URL and lock down API CORS
+        run: |
+          URL=$(gcloud run services describe "${{ env.SERVICE }}" \
+            --region "${{ env.GCP_REGION }}" --project "${{ env.GCP_PROJECT }}" \
+            --format='value(status.url)')
+          echo "Service URL: $URL"
+
+          gcloud run services update "${{ env.API_SERVICE }}" \
+            --project "${{ env.GCP_PROJECT }}" \
+            --region "${{ env.GCP_REGION }}" \
+            --update-env-vars="^;^FUSION_ANNOTATION_CORS_ORIGINS=$URL" \
+            --quiet
+
+          echo "### Web UI deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Service URL: $URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- API CORS locked to this origin: $URL" >> "$GITHUB_STEP_SUMMARY"
