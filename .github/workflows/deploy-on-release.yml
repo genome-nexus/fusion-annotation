@@ -1,15 +1,16 @@
 name: Deploy on release
 
 # Fires automatically whenever a GitHub Release is published (not just drafted).
-# Tags each service's container image with the release tag (e.g. v1.2.3) and
-# also updates its :latest tag, then deploys the new revision to Cloud Run.
-# Deploys the MCP server, the public REST API, and the web UI.
+# Deploys all three services: the MCP server and the REST API to Cloud Run
+# (each image tagged with the release tag and :latest), and the web UI to
+# GitHub Pages (static, no container).
 #
-# api/ and web/ have an ordering dependency: the web SPA bakes the API's URL
-# into its JS bundle at *build* time (Vite), so deploy-web needs deploy-api's
-# URL first; and the API's CORS allowlist is only locked down to the SPA's
-# real origin *after* web/ is deployed and its URL is known (same two-step
-# dance documented in api/deploy.sh and web/deploy.sh for manual use).
+# api/ and web/ have a one-way build-time dependency: the web SPA bakes the
+# API's URL into its JS bundle at *build* time (Vite), so deploy-web-pages
+# needs deploy-api's URL first. Unlike the old Cloud-Run-hosted web/, the
+# Pages origin (https://genome-nexus.github.io) is fixed and known in
+# advance, so deploy-api can set the API's CORS allowlist to it directly —
+# no more "deploy web, discover its URL, then lock down CORS" second step.
 #
 # Required secrets:
 #   GCP_SA_KEY                      — service-account JSON with Cloud Run Admin +
@@ -18,6 +19,9 @@ name: Deploy on release
 #                                     service (same value printed by the manual
 #                                     deploy workflow). Leave empty/absent to skip
 #                                     the MCP server's DNS-rebinding allowlist update.
+#
+# Requires GitHub Pages enabled on the repo with source "GitHub Actions"
+# (Settings → Pages → Build and deployment → Source).
 on:
   release:
     types: [published]
@@ -26,6 +30,7 @@ env:
   GCP_PROJECT: fusion-annotation
   GCP_REGION: us-central1
   AR_REPO: fusion-annotation
+  PAGES_ORIGIN: https://genome-nexus.github.io
 
 jobs:
   deploy-mcp:
@@ -161,11 +166,9 @@ jobs:
 
       - name: Deploy to Cloud Run
         run: |
-          # CORS is left at its current value (defaults to "*" on first-ever
-          # deploy) here; deploy-web locks it down to the SPA's real origin
-          # once that's known, same two-step flow as the manual deploy.sh
-          # scripts. This keeps deploy-api independently re-runnable without
-          # accidentally widening CORS back open on every release.
+          # The web UI's origin is GitHub Pages, which is a fixed, known
+          # origin (not discovered after a Cloud Run deploy like before), so
+          # CORS can be locked down to it directly on every deploy.
           gcloud run deploy "${{ env.SERVICE }}" \
             --image "$IMAGE" \
             --project "${{ env.GCP_PROJECT }}" \
@@ -175,6 +178,7 @@ jobs:
             --min-instances=0 \
             --memory=512Mi \
             --cpu=1 \
+            --update-env-vars="^;^FUSION_ANNOTATION_CORS_ORIGINS=${{ env.PAGES_ORIGIN }}" \
             --quiet
 
       - name: Print service URL
@@ -188,88 +192,56 @@ jobs:
           echo "### Released ${{ github.ref_name }} — API deployed" >> "$GITHUB_STEP_SUMMARY"
           echo "- Service URL: $URL" >> "$GITHUB_STEP_SUMMARY"
           echo "- API docs: $URL/api/docs" >> "$GITHUB_STEP_SUMMARY"
+          echo "- CORS allowlisted origin: ${{ env.PAGES_ORIGIN }}" >> "$GITHUB_STEP_SUMMARY"
           echo "- Image: \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
 
-  deploy-web:
+  deploy-web-pages:
     needs: deploy-api
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    env:
-      SERVICE: fusion-annotation-web
-      API_SERVICE: fusion-annotation-api
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
 
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
 
-      - id: auth
-        uses: google-github-actions/auth@v2
+      - uses: actions/setup-node@v4
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - uses: google-github-actions/setup-gcloud@v2
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - name: Ensure Artifact Registry repo exists
-        run: |
-          gcloud artifacts repositories describe "${{ env.AR_REPO }}" \
-            --location="${{ env.GCP_REGION }}" --project="${{ env.GCP_PROJECT }}" \
-          || gcloud artifacts repositories create "${{ env.AR_REPO }}" \
-            --repository-format=docker --location="${{ env.GCP_REGION }}" \
-            --project="${{ env.GCP_PROJECT }}" \
-            --description="fusion-annotation container images"
-
-      - name: Build and push image
+      - name: Build (VITE_API_BASE_URL baked in at build time)
+        working-directory: web
         env:
-          API_URL: ${{ needs.deploy-api.outputs.url }}
+          VITE_API_BASE_URL: ${{ needs.deploy-api.outputs.url }}
+        run: npm run build
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Summary
         run: |
-          BASE="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT }}/${{ env.AR_REPO }}/${{ env.SERVICE }}"
-          IMAGE_SHA="$BASE:${{ github.sha }}"
-          IMAGE_TAG="$BASE:${{ github.ref_name }}"
-          IMAGE_LATEST="$BASE:latest"
-
-          docker build -f web/Dockerfile --build-arg "VITE_API_BASE_URL=$API_URL" -t "$IMAGE_SHA" .
-          docker tag "$IMAGE_SHA" "$IMAGE_TAG"
-          docker tag "$IMAGE_SHA" "$IMAGE_LATEST"
-          docker push "$IMAGE_SHA"
-          docker push "$IMAGE_TAG"
-          docker push "$IMAGE_LATEST"
-
-          echo "IMAGE=$IMAGE_SHA" >> "$GITHUB_ENV"
-
-      - name: Deploy to Cloud Run
-        run: |
-          gcloud run deploy "${{ env.SERVICE }}" \
-            --image "$IMAGE" \
-            --project "${{ env.GCP_PROJECT }}" \
-            --region "${{ env.GCP_REGION }}" \
-            --allow-unauthenticated \
-            --max-instances=2 \
-            --min-instances=0 \
-            --memory=256Mi \
-            --cpu=1 \
-            --quiet
-
-      - name: Print service URL and lock down API CORS
-        run: |
-          URL=$(gcloud run services describe "${{ env.SERVICE }}" \
-            --region "${{ env.GCP_REGION }}" --project "${{ env.GCP_PROJECT }}" \
-            --format='value(status.url)')
-          echo "Service URL: $URL"
-
-          # Now that the SPA's real origin is known, restrict the API's CORS
-          # allowlist to it instead of leaving it at the "*" default.
-          gcloud run services update "${{ env.API_SERVICE }}" \
-            --project "${{ env.GCP_PROJECT }}" \
-            --region "${{ env.GCP_REGION }}" \
-            --update-env-vars="^;^FUSION_ANNOTATION_CORS_ORIGINS=$URL" \
-            --quiet
-
           echo "### Released ${{ github.ref_name }} — Web UI deployed" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Service URL: $URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- API CORS locked to this origin: $URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- Image: \`$IMAGE\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Page URL: ${{ steps.deployment.outputs.page_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Built against API: ${{ needs.deploy-api.outputs.url }}" >> "$GITHUB_STEP_SUMMARY"

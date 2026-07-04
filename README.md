@@ -391,7 +391,8 @@ components sit on top of the same core engine:
   lookup form, an HGVS.p-like result summary, a domain-retention table, and
   an interactive SVG domain diagram (the in-browser version of the figure at
   the top of this README). The current lookup is always reflected in the URL
-  query string, so the address bar doubles as the permalink.
+  query string, so the address bar doubles as the permalink. Deployed as a
+  static site on **GitHub Pages** — no server, no container, $0 hosting cost.
 
 Run both locally:
 
@@ -402,16 +403,20 @@ python api/app.py                 # serves on :8080 by default
 cd web && npm install && npm run dev   # proxies /api to localhost:8080
 ```
 
-Deploy either manually to Cloud Run with `api/deploy.sh` / `web/deploy.sh`
-(same pattern as `server/deploy.sh` for the MCP server), or automatically:
-every published GitHub Release triggers
+Deploy the API manually to Cloud Run with `api/deploy.sh` (same pattern as
+`server/deploy.sh` for the MCP server); build+deploy the web UI manually with
+`cd web && npm run build`, publishing `dist/` to GitHub Pages. Or
+automatically: every published GitHub Release triggers
 [`deploy-on-release.yml`](.github/workflows/deploy-on-release.yml), which
-builds and deploys all three services (MCP server, API, web UI) — the API's
-URL is baked into the web build, and the API's CORS allowlist is then locked
-down to the deployed web UI's real origin. For an ad-hoc redeploy between
-releases (e.g. to pick up a CORS/config change), trigger
-[`deploy-api-web.yml`](.github/workflows/deploy-api-web.yml) manually. To
-find the deployed API/web URLs, check the latest
+builds and deploys all three (MCP server + API to Cloud Run, web UI to
+GitHub Pages) — the API's URL is baked into the web build, and the API's
+CORS allowlist is locked to the Pages origin
+(`https://genome-nexus.github.io`), which is fixed and known in advance. For
+an ad-hoc redeploy between releases (e.g. to pick up a config change),
+trigger [`deploy-api-web.yml`](.github/workflows/deploy-api-web.yml)
+manually. The deployed web UI lives at
+`https://genome-nexus.github.io/fusion-annotation/`; to find the deployed
+API's URL, check the latest
 [`deploy-on-release` workflow run](https://github.com/genome-nexus/fusion-annotation/actions/workflows/deploy-on-release.yml)
 or the Cloud Run console.
 

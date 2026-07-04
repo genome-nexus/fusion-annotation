@@ -28,24 +28,25 @@ npm run dev                # http://localhost:5173, proxies /api to :8080
 
 `VITE_API_BASE_URL` — base URL of the deployed API (e.g. a Cloud Run URL).
 Vite inlines env vars into the built JS bundle at **build** time, so this
-must be set before `npm run build`/`docker build`, not at container runtime.
-See `.env.example`.
+must be set before `npm run build`, not at container/hosting runtime (there
+is no runtime container for the web UI — see below). See `.env.example`.
 
 ## Build & deploy
 
 ```bash
-npm run build               # outputs to dist/
+npm run build               # outputs to dist/ (base path /fusion-annotation/,
+                            #   matching GitHub Pages project-site serving)
 ```
 
-`Dockerfile` is a multi-stage build: compiles the SPA with `VITE_API_BASE_URL`
-as a build arg, then serves the static output via nginx (`nginx.conf`) on
-port 8080. Deploy to Cloud Run with:
-
-```bash
-export GCP_PROJECT=your-project-id
-export API_URL=https://<deployed-api>.run.app
-./deploy.sh
-```
+Deployed to **GitHub Pages** (static hosting, no container) at
+`https://genome-nexus.github.io/fusion-annotation/`, via
+[`deploy-on-release.yml`](../.github/workflows/deploy-on-release.yml)
+(automatic on every published release) or
+[`deploy-api-web.yml`](../.github/workflows/deploy-api-web.yml) (manual
+trigger). Both build with `VITE_API_BASE_URL` set to the just-deployed API's
+Cloud Run URL, then publish `dist/` via `actions/deploy-pages`. `vite.config.ts`
+sets `base: '/fusion-annotation/'` for production builds specifically because
+Pages serves a project site under that subpath rather than at the domain root.
 
 ## Permalinks
 
