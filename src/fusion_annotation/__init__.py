@@ -34,4 +34,4 @@ __all__ = [
     "annotate_effect", "annotate_knowledge", "annotate_fusion",
     "KNOWN_ONCOGENIC_PAIRS", "translate", "aa3",
 ]
-__version__ = "0.3.0"
+__version__ = "0.4.0"
