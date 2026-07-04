@@ -13,9 +13,12 @@ export default defineConfig(({ command }) => ({
     // In dev, forward /api and /health to a locally-running api/app.py
     // (uvicorn api/app.py, default port 8080) so VITE_API_BASE_URL can stay
     // unset locally; set it explicitly for a deployed API in production.
+    // Override the target with DEV_API_PROXY_TARGET if 8080 is already
+    // taken by something else on your machine (start the API with a
+    // matching PORT env var).
     proxy: {
-      '/api': 'http://localhost:8080',
-      '/health': 'http://localhost:8080',
+      '/api': process.env.DEV_API_PROXY_TARGET ?? 'http://localhost:8080',
+      '/health': process.env.DEV_API_PROXY_TARGET ?? 'http://localhost:8080',
     },
   },
 }))
