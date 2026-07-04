@@ -63,6 +63,8 @@ export function ResultView({ result, permalink }: Props) {
         threeGene={iface.three_gene}
         fiveLastAa={iface.five_last_aa}
         threeFirstAa={iface.three_first_aa}
+        fiveLength={resolved.five.protein_length}
+        threeLength={resolved.three.protein_length}
       />
 
       <table className="domain-table">

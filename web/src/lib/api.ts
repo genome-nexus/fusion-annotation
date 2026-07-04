@@ -17,6 +17,26 @@ function toSearchParams(params: AnnotateParams): URLSearchParams {
   return search;
 }
 
+/** FastAPI/Pydantic validation errors (HTTP 422) return `detail` as a list of
+ * {loc, msg, type} objects rather than a plain string; every other error
+ * path in api/app.py (HTTPException) returns a string. Normalize both into a
+ * single human-readable string so callers can render `error.detail` directly
+ * without risking a "objects are not valid as a React child" crash. */
+function formatDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((err) => {
+        const loc = Array.isArray(err?.loc) ? err.loc.join(".") : undefined;
+        const msg = typeof err?.msg === "string" ? err.msg : JSON.stringify(err);
+        return loc ? `${loc}: ${msg}` : msg;
+      })
+      .join(", ");
+  }
+  if (detail != null) return JSON.stringify(detail);
+  return fallback;
+}
+
 export async function annotateFusion(params: AnnotateParams): Promise<AnnotationResult> {
   const search = toSearchParams(params);
   const response = await fetch(`${API_BASE_URL}/api/annotate?${search.toString()}`);
@@ -24,7 +44,7 @@ export async function annotateFusion(params: AnnotateParams): Promise<Annotation
     let detail = response.statusText;
     try {
       const body = await response.json();
-      detail = body.detail ?? detail;
+      detail = formatDetail(body?.detail, detail);
     } catch {
       // response body wasn't JSON — fall back to statusText
     }

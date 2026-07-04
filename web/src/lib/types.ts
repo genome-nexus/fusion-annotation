@@ -56,6 +56,10 @@ export interface ResolvedPartner {
     genomic_position?: number;
     cds_coord: number;
   };
+  /** Full-length (untruncated) protein size for this partner. Used to lay
+   * out the domain diagram's backbone even when the partner has zero
+   * annotated domains. */
+  protein_length: number;
 }
 
 export interface AnnotationResult {

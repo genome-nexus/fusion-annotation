@@ -7,6 +7,8 @@ interface Props {
   threeGene: string;
   fiveLastAa: number;
   threeFirstAa: number;
+  fiveLength: number;
+  threeLength: number;
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -91,12 +93,18 @@ function ProteinTrack({
 /** Interactive SVG domain-retention diagram — the in-browser equivalent of
  * docs/fusion_domain_map.png: one track per partner, domains colored by
  * retained/lost/disrupted status, with the breakpoint marked on each. */
-export function DomainDiagram({ domains, fiveGene, threeGene, fiveLastAa, threeFirstAa }: Props) {
+export function DomainDiagram({
+  domains,
+  fiveGene,
+  threeGene,
+  fiveLastAa,
+  threeFirstAa,
+  fiveLength,
+  threeLength,
+}: Props) {
   const [hovered, setHovered] = useState<DomainCall | null>(null);
   const fiveDomains = domains.filter((d) => d.gene === fiveGene);
   const threeDomains = domains.filter((d) => d.gene === threeGene);
-  const fiveLength = fiveDomains[0]?.partner_protein_length || fiveLastAa;
-  const threeLength = threeDomains[0]?.partner_protein_length || threeFirstAa;
 
   const height = TRACK_GAP * 2 + 20;
 

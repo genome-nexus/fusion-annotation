@@ -479,6 +479,11 @@ def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict)
         "transcript": tx.transcript_id,
         "transcript_source": source,
         "breakpoint": breakpoint_prov,
+        # Full-length (untruncated) protein size for this partner. Callers that
+        # need to lay out the whole parent protein (e.g. a domain-retention
+        # diagram) should read this rather than inferring it from the domains
+        # list, which is empty whenever a partner has no annotated domains.
+        "protein_length": len(tx.protein),
     }
 
 

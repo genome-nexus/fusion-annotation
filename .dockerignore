@@ -6,3 +6,5 @@ docs/
 **/__pycache__/
 *.pyc
 .pytest_cache/
+web/node_modules/
+web/dist/

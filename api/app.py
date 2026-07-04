@@ -132,7 +132,7 @@ async def health() -> PlainTextResponse:
 
 @app.get("/api/annotate", response_model=AnnotateResponse)
 @limiter.limit(RATE_LIMIT)
-async def annotate_get(
+def annotate_get(
     request: Request,  # noqa: ARG001 - required by slowapi's Limiter
     five_gene: str = Query(..., description="5' partner gene symbol, e.g. EML4"),
     three_gene: str = Query(..., description="3' partner gene symbol, e.g. ALK"),
@@ -147,7 +147,12 @@ async def annotate_get(
 ) -> dict:
     """Annotate a gene fusion. Inputs as query params, so this URL is a
     shareable permalink — reopening it re-runs the annotation (nothing is
-    stored server-side)."""
+    stored server-side).
+
+    Plain ``def``, not ``async def``: annotate_fusion/make_provider do
+    blocking network I/O via `requests`, so a sync endpoint lets FastAPI run
+    it in its worker thread pool instead of blocking the event loop.
+    """
     params = AnnotateRequest(
         five_gene=five_gene, three_gene=three_gene,
         five_exon=five_exon, three_exon=three_exon,
@@ -159,12 +164,25 @@ async def annotate_get(
 
 @app.post("/api/annotate", response_model=AnnotateResponse)
 @limiter.limit(RATE_LIMIT)
-async def annotate_post(request: Request, params: AnnotateRequest) -> dict:  # noqa: ARG001
-    """Annotate a gene fusion. Same fields as GET /api/annotate, as a JSON body."""
+def annotate_post(request: Request, params: AnnotateRequest) -> dict:  # noqa: ARG001
+    """Annotate a gene fusion. Same fields as GET /api/annotate, as a JSON body.
+
+    Plain ``def`` for the same reason as annotate_get above.
+    """
     return _run_annotation(params)
 
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "8080"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # proxy_headers + forwarded_allow_ips make uvicorn trust X-Forwarded-For
+    # from its (only) ingress. Required for get_remote_address-based rate
+    # limiting to actually key on the real client IP rather than Cloud Run's
+    # internal proxy address — without this every caller behind the proxy
+    # would share one rate-limit bucket. "*" is the standard setting Cloud
+    # Run's own docs recommend, since the container is never reachable except
+    # through that trusted proxy. Override via FUSION_ANNOTATION_TRUSTED_PROXIES
+    # (comma-separated) if deploying behind a different/untrusted-by-default setup.
+    forwarded_allow_ips = os.environ.get("FUSION_ANNOTATION_TRUSTED_PROXIES", "*")
+    uvicorn.run(app, host="0.0.0.0", port=port,
+                proxy_headers=True, forwarded_allow_ips=forwarded_allow_ips)

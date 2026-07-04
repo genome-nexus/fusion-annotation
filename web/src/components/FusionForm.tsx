@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { AnnotateParams } from "../lib/types";
 
 interface Props {
@@ -15,6 +15,17 @@ export function FusionForm({ initial, onSubmit, loading }: Props) {
   const [showAdvanced, setShowAdvanced] = useState(
     Boolean(initial.five_transcript || initial.three_transcript || initial.species !== "homo_sapiens"),
   );
+
+  // Resync when `initial` changes after mount — e.g. browser Back/Forward
+  // (App.tsx's popstate handler) updates the URL and passes a new `initial`
+  // down, but this component's own state wouldn't otherwise pick it up,
+  // leaving the form stale relative to the displayed result.
+  useEffect(() => {
+    setValues(initial);
+    setShowAdvanced(
+      Boolean(initial.five_transcript || initial.three_transcript || initial.species !== "homo_sapiens"),
+    );
+  }, [initial]);
 
   function update<K extends keyof AnnotateParams>(key: K, value: AnnotateParams[K]) {
     setValues((prev) => ({ ...prev, [key]: value }));

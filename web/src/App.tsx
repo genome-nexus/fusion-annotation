@@ -39,18 +39,23 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [permalink, setPermalink] = useState(window.location.href);
 
-  const runAnnotation = useCallback(async (params: AnnotateParams) => {
+  const runAnnotation = useCallback(async (params: AnnotateParams, shouldPushState = true) => {
     setFormValues(params);
     setLoading(true);
     setError(null);
 
-    // Write inputs to the URL query string *before* the request resolves, so
-    // the address bar is always a valid, shareable permalink for this
-    // lookup even if the caller navigates away before it finishes.
-    const search = toSearchParams(params);
-    const newUrl = `${window.location.pathname}?${search.toString()}`;
-    window.history.pushState(null, "", newUrl);
-    setPermalink(window.location.href);
+    if (shouldPushState) {
+      // Write inputs to the URL query string *before* the request resolves,
+      // so the address bar is always a valid, shareable permalink for this
+      // lookup even if the caller navigates away before it finishes. Skipped
+      // when we're replaying a URL that already reflects the intended state
+      // (initial load, or a popstate from Back/Forward) — pushing again
+      // there would create a duplicate history entry and trap the user.
+      const search = toSearchParams(params);
+      const newUrl = `${window.location.pathname}?${search.toString()}`;
+      window.history.pushState(null, "", newUrl);
+      setPermalink(window.location.href);
+    }
 
     try {
       const annotation = await annotateFusion(params);
@@ -68,14 +73,15 @@ function App() {
   useEffect(() => {
     const initial = paramsFromLocation();
     if (initial.five_gene && initial.three_gene) {
-      runAnnotation(initial);
+      runAnnotation(initial, false);
     }
     // Also react to browser back/forward between permalinks.
     const onPopState = () => {
       const params = paramsFromLocation();
       setFormValues(params);
+      setPermalink(window.location.href);
       if (params.five_gene && params.three_gene) {
-        runAnnotation(params);
+        runAnnotation(params, false);
       } else {
         setResult(null);
       }
