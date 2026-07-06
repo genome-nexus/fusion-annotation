@@ -54,6 +54,7 @@ _CODON = {
 _AA3 = {'A':'Ala','R':'Arg','N':'Asn','D':'Asp','C':'Cys','Q':'Gln','E':'Glu',
  'G':'Gly','H':'His','I':'Ile','L':'Leu','K':'Lys','M':'Met','F':'Phe','P':'Pro',
  'S':'Ser','T':'Thr','W':'Trp','Y':'Tyr','V':'Val','*':'Ter','X':'Xaa'}
+PROMOTER_WINDOW_BP = 2_000
 
 def translate(cds: str) -> str:
     cds = cds.upper()
@@ -208,6 +209,229 @@ def parse_genomic_breakpoint(value) -> int:
         return int(s)
     except ValueError as exc:
         raise ValueError(f"could not parse genomic breakpoint {value!r}") from exc
+
+
+def _transcript_coord(strand: int, g_pos: int) -> int:
+    return g_pos if strand == 1 else -g_pos
+
+
+def _exon_offset(strand: int, exon_lo: int, exon_hi: int, g_pos: int) -> int:
+    return (g_pos - exon_lo + 1) if strand == 1 else (exon_hi - g_pos + 1)
+
+
+def _segment_offsets(strand: int, exon_lo: int, exon_hi: int,
+                     seg_lo: int, seg_hi: int) -> tuple[int, int]:
+    a = _exon_offset(strand, exon_lo, exon_hi, seg_lo)
+    b = _exon_offset(strand, exon_lo, exon_hi, seg_hi)
+    return min(a, b), max(a, b)
+
+
+def _transcript_bounds(tx: Transcript) -> Optional[tuple[int, int]]:
+    if not tx.exon_genomic:
+        return None
+    first_lo, first_hi = tx.exon_genomic[0]
+    last_lo, last_hi = tx.exon_genomic[-1]
+    tss = first_lo if tx.strand == 1 else first_hi
+    tx_end = last_hi if tx.strand == 1 else last_lo
+    return tss, tx_end
+
+
+def _build_transcript_structure(tx: Transcript) -> Optional[dict]:
+    """Return a diagram-friendly transcript structure summary, if available."""
+    if not tx.exon_genomic:
+        return None
+
+    exons: list[dict] = []
+    total_exonic_length = 0
+    bounds = _transcript_bounds(tx)
+    if bounds is None:
+        return None
+    tss, tx_end = bounds
+    cds_t_lo, cds_t_hi = sorted((
+        _transcript_coord(tx.strand, tx.cds_g_start),
+        _transcript_coord(tx.strand, tx.cds_g_end),
+    ))
+
+    for rank, (g_lo, g_hi) in enumerate(tx.exon_genomic, start=1):
+        length = g_hi - g_lo + 1
+        total_exonic_length += length
+        exon_t_lo, exon_t_hi = sorted((
+            _transcript_coord(tx.strand, g_lo),
+            _transcript_coord(tx.strand, g_hi),
+        ))
+        coding_lo = max(g_lo, tx.cds_g_start)
+        coding_hi = min(g_hi, tx.cds_g_end)
+
+        segments: list[dict] = []
+        if coding_hi < coding_lo:
+            kind = "utr5" if exon_t_hi < cds_t_lo else "utr3"
+            segments.append({"kind": kind, "start": 1, "end": length})
+        else:
+            if tx.strand == 1:
+                if g_lo < coding_lo:
+                    start, end = _segment_offsets(tx.strand, g_lo, g_hi, g_lo, coding_lo - 1)
+                    segments.append({"kind": "utr5", "start": start, "end": end})
+                start, end = _segment_offsets(tx.strand, g_lo, g_hi, coding_lo, coding_hi)
+                segments.append({"kind": "coding", "start": start, "end": end})
+                if coding_hi < g_hi:
+                    start, end = _segment_offsets(tx.strand, g_lo, g_hi, coding_hi + 1, g_hi)
+                    segments.append({"kind": "utr3", "start": start, "end": end})
+            else:
+                if coding_hi < g_hi:
+                    start, end = _segment_offsets(tx.strand, g_lo, g_hi, coding_hi + 1, g_hi)
+                    segments.append({"kind": "utr5", "start": start, "end": end})
+                start, end = _segment_offsets(tx.strand, g_lo, g_hi, coding_lo, coding_hi)
+                segments.append({"kind": "coding", "start": start, "end": end})
+                if g_lo < coding_lo:
+                    start, end = _segment_offsets(tx.strand, g_lo, g_hi, g_lo, coding_lo - 1)
+                    segments.append({"kind": "utr3", "start": start, "end": end})
+
+        exons.append({
+            "rank": rank,
+            "genomic_start": g_lo,
+            "genomic_end": g_hi,
+            "length": length,
+            "segments": segments,
+        })
+
+    return {
+        "strand": tx.strand,
+        "promoter_window_bp": PROMOTER_WINDOW_BP,
+        "tss_genomic": tss,
+        "transcript_end_genomic": tx_end,
+        "transcript_length": total_exonic_length,
+        "exons": exons,
+    }
+
+
+def _breakpoint_context(tx: Transcript, breakpoint_prov: dict,
+                        side: Literal["end", "start"]) -> dict:
+    """Describe a breakpoint relative to transcript structure for UI/diagram use."""
+    if breakpoint_prov["type"] == "exon":
+        rank = breakpoint_prov["exon"]
+        exon_length = None
+        if tx.exon_genomic and 1 <= rank <= len(tx.exon_genomic):
+            g_lo, g_hi = tx.exon_genomic[rank - 1]
+            exon_length = g_hi - g_lo + 1
+        boundary = "after" if side == "end" else "before"
+        return {
+            "region": "exon_boundary",
+            "label": f"{boundary} exon {rank}",
+            "exon_rank": rank,
+            "intron_rank": None,
+            "exon_offset": exon_length if boundary == "after" else 1,
+            "exon_length": exon_length,
+            "boundary": boundary,
+        }
+
+    g_pos = breakpoint_prov["genomic_position"]
+    if not tx.exon_genomic:
+        return {
+            "region": "unknown",
+            "label": f"g.{g_pos}",
+            "exon_rank": None,
+            "intron_rank": None,
+            "exon_offset": None,
+            "exon_length": None,
+            "boundary": None,
+        }
+
+    bounds = _transcript_bounds(tx)
+    if bounds is None:
+        return {
+            "region": "unknown",
+            "label": f"g.{g_pos}",
+            "exon_rank": None,
+            "intron_rank": None,
+            "exon_offset": None,
+            "exon_length": None,
+            "boundary": None,
+        }
+
+    tss, tx_end = bounds
+    tp = _transcript_coord(tx.strand, g_pos)
+    ttss = _transcript_coord(tx.strand, tss)
+    tend = _transcript_coord(tx.strand, tx_end)
+    cds_t_lo, cds_t_hi = sorted((
+        _transcript_coord(tx.strand, tx.cds_g_start),
+        _transcript_coord(tx.strand, tx.cds_g_end),
+    ))
+
+    if tp < ttss:
+        return {
+            "region": "upstream",
+            "label": "5' upstream / promoter",
+            "exon_rank": None,
+            "intron_rank": None,
+            "exon_offset": None,
+            "exon_length": None,
+            "boundary": None,
+        }
+    if tp > tend:
+        return {
+            "region": "downstream",
+            "label": "3' downstream",
+            "exon_rank": None,
+            "intron_rank": None,
+            "exon_offset": None,
+            "exon_length": None,
+            "boundary": None,
+        }
+
+    for rank, (g_lo, g_hi) in enumerate(tx.exon_genomic, start=1):
+        if g_lo <= g_pos <= g_hi:
+            exon_length = g_hi - g_lo + 1
+            exon_offset = _exon_offset(tx.strand, g_lo, g_hi, g_pos)
+            if tp < cds_t_lo:
+                region = "utr5"
+                label = f"exon {rank} (5' UTR)"
+            elif tp > cds_t_hi:
+                region = "utr3"
+                label = f"exon {rank} (3' UTR)"
+            else:
+                region = "coding"
+                label = f"exon {rank}"
+            return {
+                "region": region,
+                "label": label,
+                "exon_rank": rank,
+                "intron_rank": None,
+                "exon_offset": exon_offset,
+                "exon_length": exon_length,
+                "boundary": None,
+            }
+
+    for rank in range(1, len(tx.exon_genomic)):
+        left_lo, left_hi = tx.exon_genomic[rank - 1]
+        right_lo, right_hi = tx.exon_genomic[rank]
+        left_t_hi = max(_transcript_coord(tx.strand, left_lo), _transcript_coord(tx.strand, left_hi))
+        right_t_lo = min(_transcript_coord(tx.strand, right_lo), _transcript_coord(tx.strand, right_hi))
+        if left_t_hi < tp < right_t_lo:
+            if tp < cds_t_lo:
+                label = f"intron {rank} (5' UTR)"
+            elif tp > cds_t_hi:
+                label = f"intron {rank} (3' UTR)"
+            else:
+                label = f"intron {rank}"
+            return {
+                "region": "intron",
+                "label": label,
+                "exon_rank": None,
+                "intron_rank": rank,
+                "exon_offset": None,
+                "exon_length": None,
+                "boundary": None,
+            }
+
+    return {
+        "region": "unknown",
+        "label": f"g.{g_pos}",
+        "exon_rank": None,
+        "intron_rank": None,
+        "exon_offset": None,
+        "exon_length": None,
+        "boundary": None,
+    }
 
 
 # ----------------------------------------------------------------------------
@@ -463,8 +687,8 @@ def annotate_fusion(provider: DataProvider,
         # Echo the genome build so a caller can confirm their genomic breakpoints
         # were interpreted against the build they intended (defaults to GRCh38).
         "genome_build": getattr(provider, "assembly", "GRCh38"),
-        "five": _echo_partner(five, five_tx, five_bp),
-        "three": _echo_partner(three, three_tx, three_bp),
+        "five": _echo_partner(five, five_tx, five_bp, "end"),
+        "three": _echo_partner(three, three_tx, three_bp, "start"),
     }
     both_genomic = five_bp["type"] == "genomic" and three_bp["type"] == "genomic"
     warnings = _sanity_warnings(five_gene, three_gene, fp, kn, both_genomic)
@@ -478,7 +702,8 @@ def annotate_fusion(provider: DataProvider,
             "resolved": resolved, "warnings": warnings}
 
 
-def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict) -> dict:
+def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict,
+                  side: Literal["end", "start"]) -> dict:
     """Echo the transcript actually used and how it was selected, for caller transparency."""
     if user_tx:
         source = "user-specified"
@@ -488,16 +713,20 @@ def _echo_partner(tx: Transcript, user_tx: Optional[str], breakpoint_prov: dict)
         source = "non-canonical"
     else:
         source = "provider-default"
+    structure = _build_transcript_structure(tx)
+    breakpoint_info = dict(breakpoint_prov)
+    breakpoint_info["context"] = _breakpoint_context(tx, breakpoint_prov, side)
     return {
         "gene": tx.gene_symbol,
         "transcript": tx.transcript_id,
         "transcript_source": source,
-        "breakpoint": breakpoint_prov,
+        "breakpoint": breakpoint_info,
         # Full-length (untruncated) protein size for this partner. Callers that
         # need to lay out the whole parent protein (e.g. a domain-retention
         # diagram) should read this rather than inferring it from the domains
         # list, which is empty whenever a partner has no annotated domains.
         "protein_length": len(tx.protein),
+        "structure": structure,
     }
 
 

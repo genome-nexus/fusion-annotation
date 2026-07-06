@@ -1,7 +1,8 @@
 // Pure domain-diagram logic shared by DomainDiagram.tsx: domain de-duplication,
-// category-based coloring, and label-collision avoidance. Split out from the
-// component file so Vite's fast-refresh only sees component exports there.
-import type { DomainCall } from "./types";
+// category-based coloring, structure-track layout, and label-collision
+// avoidance. Split out from the component file so Vite's fast-refresh only
+// sees component exports there.
+import type { DomainCall, ResolvedPartner, TranscriptStructure } from "./types";
 
 export type Status = "RETAINED" | "LOST" | "DISRUPTED";
 
@@ -12,16 +13,26 @@ export interface CanonDomain {
   status: Status;
 }
 
+export interface StructureLayoutExon {
+  rank: number;
+  start: number;
+  end: number;
+  width: number;
+  length: number;
+  segments: TranscriptStructure["exons"][number]["segments"];
+}
+
+export interface StructureLayout {
+  promoterStart: number;
+  promoterEnd: number;
+  width: number;
+  exons: StructureLayoutExon[];
+}
+
 // ---------------------------------------------------------------------------
 // Domain -> color: a single lookup used for every track (5' partner, 3'
 // partner, and the fusion protein), so the *same* domain always renders in
-// the same color wherever it appears. This mirrors docs/generate_domain_map.py,
-// which regenerates docs/fusion_domain_map.png with the same scheme — fixing
-// https://github.com/genome-nexus/fusion-annotation/issues/17, where the ALK
-// kinase domain used to render orange in one track and blue in another.
-// Curated colors cover the domain categories seen in common fusions; any
-// other domain name still gets a stable (hash-based) color from the
-// fallback palette, so it's consistent across renders without being random.
+// the same color wherever it appears.
 // ---------------------------------------------------------------------------
 const CATEGORY_KEYWORDS: Array<[string, string]> = [
   ["kinase", "#e8590c"],
@@ -33,6 +44,10 @@ const CATEGORY_KEYWORDS: Array<[string, string]> = [
 const FALLBACK_PALETTE = [
   "#495057", "#c2255c", "#5f3dc4", "#0b7285", "#e67700", "#1864ab", "#862e9c",
 ];
+const PROMOTER_WIDTH = 34;
+const EXON_GAP = 12;
+const EXON_MIN_WIDTH = 18;
+const EXON_MAX_WIDTH = 34;
 
 function hashString(s: string): number {
   let h = 0;
@@ -50,15 +65,20 @@ export function colorFor(name: string): string {
   return FALLBACK_PALETTE[hashString(lower) % FALLBACK_PALETTE.length];
 }
 
+export function structureSegmentColor(kind: "utr5" | "coding" | "utr3"): string {
+  if (kind === "coding") return "#4c6ef5";
+  if (kind === "utr5") return "#a5d8ff";
+  return "#d0ebff";
+}
+
 // ---------------------------------------------------------------------------
 // Domain de-duplication: Genome Nexus reports many overlapping InterPro/Pfam
 // records describing the same physical domain (different source databases,
-// slightly different boundaries — e.g. 7+ records covering the ALK kinase
-// region alone). Rendering every raw record as its own rectangle is
-// illegible, so overlapping same-type records are merged into one
+// slightly different boundaries). Rendering every raw record as its own
+// rectangle is illegible, so overlapping same-type records are merged into one
 // representative block, preferring more granular types (repeat > domain >
-// conserved_site) and dropping coarser records once a finer one already
-// covers the same range. Same algorithm as docs/generate_domain_map.py.
+// conserved_site) and dropping coarser records once a finer one already covers
+// the same range.
 // ---------------------------------------------------------------------------
 const KEEP_TYPES = new Set(["domain", "repeat", "conserved_site"]);
 const TYPE_PRIORITY = ["repeat", "domain", "conserved_site"];
@@ -129,6 +149,65 @@ export function canonicalizeDomains(raw: DomainCall[], gene: string): CanonDomai
   });
   reps.sort((a, b) => a.start - b.start);
   return reps;
+}
+
+function exonWidth(length: number): number {
+  return Math.max(EXON_MIN_WIDTH, Math.min(EXON_MAX_WIDTH, 10 + Math.sqrt(Math.max(length, 1)) * 0.8));
+}
+
+export function layoutTranscriptStructure(structure: TranscriptStructure): StructureLayout {
+  const exons: StructureLayoutExon[] = [];
+  let cursor = PROMOTER_WIDTH + EXON_GAP;
+  for (const exon of structure.exons) {
+    const width = exonWidth(exon.length);
+    exons.push({
+      rank: exon.rank,
+      start: cursor,
+      end: cursor + width,
+      width,
+      length: exon.length,
+      segments: exon.segments,
+    });
+    cursor += width + EXON_GAP;
+  }
+  return {
+    promoterStart: 0,
+    promoterEnd: PROMOTER_WIDTH,
+    width: exons.length > 0 ? exons[exons.length - 1].end + EXON_GAP / 2 : PROMOTER_WIDTH + EXON_GAP,
+    exons,
+  };
+}
+
+export function transcriptBreakpointPosition(partner: ResolvedPartner, layout: StructureLayout): number | null {
+  const { context } = partner.breakpoint;
+  if (context.region === "upstream") return (layout.promoterStart + layout.promoterEnd) / 2;
+  if (context.region === "downstream") return layout.width - EXON_GAP / 4;
+  if (context.intron_rank != null) {
+    const left = layout.exons[context.intron_rank - 1];
+    const right = layout.exons[context.intron_rank];
+    if (!left || !right) return null;
+    return (left.end + right.start) / 2;
+  }
+  if (context.exon_rank != null) {
+    const exon = layout.exons[context.exon_rank - 1];
+    if (!exon) return null;
+    if (context.boundary === "before") return exon.start;
+    if (context.boundary === "after") return exon.end;
+    if (context.exon_offset != null && context.exon_length != null) {
+      const frac = context.exon_length <= 1 ? 0.5 : (context.exon_offset - 1) / (context.exon_length - 1);
+      return exon.start + frac * exon.width;
+    }
+    return (exon.start + exon.end) / 2;
+  }
+  return null;
+}
+
+export function transcriptBreakpointLabel(partner: ResolvedPartner): string {
+  const { breakpoint } = partner;
+  if (breakpoint.type === "genomic" && breakpoint.genomic_position != null) {
+    return `g.${breakpoint.genomic_position} · ${breakpoint.context.label}`;
+  }
+  return breakpoint.context.label;
 }
 
 /** Group adjacent same-name domains under one shared label, then stagger

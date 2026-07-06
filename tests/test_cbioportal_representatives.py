@@ -93,6 +93,9 @@ def test_tmprss2_erg_zero_coding_case_keeps_zero_aa_five_prime_partner(provider,
     )
     assert result["interface"]["five_last_aa"] == 0
     assert result["interface"]["hgvsp_like"].startswith("TMPRSS2:p.0::")
+    assert result["resolved"]["five"]["breakpoint"]["context"]["region"] == "intron"
+    assert "5' UTR" in result["resolved"]["five"]["breakpoint"]["context"]["label"]
+    assert result["resolved"]["five"]["structure"]["exons"]
 
 
 def test_one_sided_egfr_case_still_raises_clear_mapping_error(provider, fixture_data):

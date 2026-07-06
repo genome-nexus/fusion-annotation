@@ -1,17 +1,4 @@
-"""Render a fusion-protein domain-retention diagram as a PNG.
-
-Shared by ``docs/generate_domain_map.py`` (regenerates the README figure) and
-the MCP server (``server/app.py``, attaches the diagram to the
-``annotate_gene_fusion`` tool response) so both places use the exact same
-domain de-duplication and category-color scheme — see
-https://github.com/genome-nexus/fusion-annotation/issues/17, which was
-caused by the two previously having inconsistent, ad hoc coloring.
-
-This module is intentionally NOT imported anywhere in the core package's
-``__init__`` — matplotlib is a heavy optional dependency (extra ``docs`` /
-``server``), consistent with the core annotation engine's zero-runtime-
-dependency design. Import it lazily where needed.
-"""
+"""Render transcript-structure and protein-domain fusion diagrams as PNG."""
 from __future__ import annotations
 
 import hashlib
@@ -19,24 +6,20 @@ from typing import Optional
 
 from .core import aa3
 
-# ---------------------------------------------------------------------------
-# Domain -> color: a single lookup used for every track (5' partner, 3'
-# partner, and the fusion protein), so the *same* domain always renders in
-# the same color wherever it appears. Curated colors for common domain
-# categories; anything else falls back to a deterministic (md5-hash-based)
-# pick from FALLBACK_PALETTE so unknown domains still get a stable,
-# distinguishable color instead of a random or track-dependent one.
-# ---------------------------------------------------------------------------
 CATEGORY_KEYWORDS = [
-    ("kinase", "#e8590c"),          # orange
-    ("wd40", "#2f9e44"),            # green
-    ("beta-propeller", "#2f9e44"),  # green (same family as WD40 repeats)
-    ("help", "#0c8599"),            # teal
-    ("mam domain", "#1971c2"),      # blue
+    ("kinase", "#e8590c"),
+    ("wd40", "#2f9e44"),
+    ("beta-propeller", "#2f9e44"),
+    ("help", "#0c8599"),
+    ("mam domain", "#1971c2"),
 ]
 FALLBACK_PALETTE = [
     "#495057", "#c2255c", "#5f3dc4", "#0b7285", "#e67700", "#1864ab", "#862e9c",
 ]
+PROMOTER_WIDTH = 34.0
+EXON_GAP = 12.0
+EXON_MIN_WIDTH = 18.0
+EXON_MAX_WIDTH = 34.0
 
 
 def color_for(name: str) -> str:
@@ -48,12 +31,19 @@ def color_for(name: str) -> str:
     return FALLBACK_PALETTE[digest % len(FALLBACK_PALETTE)]
 
 
+def structure_segment_color(kind: str) -> str:
+    if kind == "coding":
+        return "#4c6ef5"
+    if kind == "utr5":
+        return "#a5d8ff"
+    return "#d0ebff"
+
+
 def _overlaps(a, b):
     return not (a["end"] < b["start"] or a["start"] > b["end"])
 
 
 def _cluster_by_overlap(items):
-    """Group items that pairwise overlap into connected-component clusters."""
     clusters = []
     for it in items:
         merged = [it]
@@ -80,20 +70,6 @@ def _span_overlap_frac(span, clusters):
 
 
 def canonicalize_domains(raw_domains, gene):
-    """Collapse the raw, highly redundant per-source domain hits for one gene
-    into a small set of representative blocks.
-
-    Genome Nexus returns many overlapping InterPro/Pfam records describing
-    the same physical domain (different databases, different exact
-    boundaries). We keep ``domain``/``repeat``/``conserved_site`` type
-    records with a real curated name (dropping bare Pfam accessions used as
-    a placeholder name), cluster each type separately by overlap, and — most
-    specific/granular first (repeat, then domain, then conserved_site) —
-    drop any later cluster that is >=50% covered by an already-kept cluster
-    (a coarser "superfamily-ish" or sub-feature re-annotation of the same
-    region, e.g. the tiny "ATP binding site" motif fully inside the already-
-    kept kinase domain block).
-    """
     KEEP_TYPES = {"domain", "repeat", "conserved_site"}
     items = [d for d in raw_domains
              if d["gene"] == gene and d["type"] in KEEP_TYPES and d["name"] != d["accession"]]
@@ -124,10 +100,6 @@ def canonicalize_domains(raw_domains, gene):
 
 
 def _label_rows(domains, protein_len):
-    """Group adjacent same-name domains under one shared label, then stagger
-    labels into extra rows when their estimated text width would collide
-    with a neighboring label — avoids the illegible overlapping-text problem
-    you get from labeling every individual rectangle independently."""
     groups = []
     for d in domains:
         gap_tolerance = protein_len * 0.03
@@ -136,7 +108,7 @@ def _label_rows(domains, protein_len):
         else:
             groups.append({"name": d["name"], "start": d["start"], "end": d["end"]})
 
-    row_free_at = []  # row index -> x position where that row is next free
+    row_free_at = []
     placements = []
     for g in groups:
         center = (g["start"] + g["end"]) / 2
@@ -153,7 +125,7 @@ def _label_rows(domains, protein_len):
 
 
 def _draw_track(plt_module, ax, label, protein_len, domains, breakpoint_aa=None,
-                 breakpoint_label=None, junction_label=None):
+                breakpoint_label=None, junction_label=None):
     from matplotlib.patches import Rectangle
 
     placements = _label_rows(domains, protein_len)
@@ -168,7 +140,7 @@ def _draw_track(plt_module, ax, label, protein_len, domains, breakpoint_aa=None,
         alpha = 1.0 if d["status"] == "RETAINED" else 0.85 if d["status"] == "DISRUPTED" else 0.35
         linestyle = "dashed" if d["status"] == "DISRUPTED" else "solid"
         ax.add_patch(Rectangle((d["start"], 0.3), width, 0.4, facecolor=color_for(d["name"]),
-                                edgecolor="black", linewidth=0.6, alpha=alpha, linestyle=linestyle))
+                               edgecolor="black", linewidth=0.6, alpha=alpha, linestyle=linestyle))
     for center, row, name in placements:
         ax.text(center, 0.78 + row * 0.28, name, ha="center", va="bottom", fontsize=9)
     if breakpoint_aa is not None:
@@ -187,6 +159,113 @@ def _draw_track(plt_module, ax, label, protein_len, domains, breakpoint_aa=None,
         ax.spines[spine].set_visible(False)
 
 
+def _exon_width(length: int) -> float:
+    return max(EXON_MIN_WIDTH, min(EXON_MAX_WIDTH, 10 + (max(length, 1) ** 0.5) * 0.8))
+
+
+def _layout_transcript_structure(structure: dict) -> dict:
+    exons = []
+    cursor = PROMOTER_WIDTH + EXON_GAP
+    for exon in structure["exons"]:
+        width = _exon_width(exon["length"])
+        exons.append({
+            "rank": exon["rank"],
+            "start": cursor,
+            "end": cursor + width,
+            "width": width,
+            "length": exon["length"],
+            "segments": exon["segments"],
+        })
+        cursor += width + EXON_GAP
+    width = (exons[-1]["end"] + EXON_GAP / 2) if exons else (PROMOTER_WIDTH + EXON_GAP)
+    return {"promoter_start": 0.0, "promoter_end": PROMOTER_WIDTH, "width": width, "exons": exons}
+
+
+def _transcript_breakpoint_x(partner: dict, layout: dict) -> Optional[float]:
+    ctx = partner["breakpoint"]["context"]
+    if ctx["region"] == "upstream":
+        return (layout["promoter_start"] + layout["promoter_end"]) / 2
+    if ctx["region"] == "downstream":
+        return layout["width"] - EXON_GAP / 4
+    if ctx["intron_rank"] is not None:
+        left = layout["exons"][ctx["intron_rank"] - 1]
+        right = layout["exons"][ctx["intron_rank"]]
+        return (left["end"] + right["start"]) / 2
+    if ctx["exon_rank"] is not None:
+        exon = layout["exons"][ctx["exon_rank"] - 1]
+        if ctx["boundary"] == "before":
+            return exon["start"]
+        if ctx["boundary"] == "after":
+            return exon["end"]
+        if ctx["exon_offset"] is not None and ctx["exon_length"] is not None:
+            frac = 0.5 if ctx["exon_length"] <= 1 else (ctx["exon_offset"] - 1) / (ctx["exon_length"] - 1)
+            return exon["start"] + frac * exon["width"]
+        return (exon["start"] + exon["end"]) / 2
+    return None
+
+
+def _transcript_breakpoint_label(partner: dict) -> str:
+    bp = partner["breakpoint"]
+    if bp["type"] == "genomic" and bp.get("genomic_position") is not None:
+        return f"g.{bp['genomic_position']} · {bp['context']['label']}"
+    return bp["context"]["label"]
+
+
+def _draw_transcript_track(ax, label: str, partner: dict):
+    from matplotlib.patches import Rectangle
+
+    structure = partner.get("structure")
+    if not structure:
+        return
+
+    layout = _layout_transcript_structure(structure)
+    body_y = 0.38
+    label_y = body_y + 0.46
+    height = 0.34
+    strand = "+ strand" if structure["strand"] == 1 else "- strand"
+
+    ax.set_xlim(0, layout["width"])
+    ax.set_ylim(0, 1.35)
+    ax.set_yticks([])
+    ax.set_title(f"{label}  ({partner['transcript']} · {strand})", loc="left", fontsize=13, pad=18)
+
+    ax.text((layout["promoter_start"] + layout["promoter_end"]) / 2, label_y, "promoter",
+            ha="center", va="bottom", fontsize=9)
+    ax.add_patch(Rectangle((layout["promoter_start"], body_y),
+                           layout["promoter_end"] - layout["promoter_start"], height,
+                           facecolor="#fff3bf", edgecolor="#c92a2a",
+                           linewidth=0.8, linestyle="dashed"))
+
+    for i, exon in enumerate(layout["exons"]):
+        if i == 0:
+            ax.plot([layout["promoter_end"], exon["start"]],
+                    [body_y + height / 2, body_y + height / 2],
+                    color="#868e96", linewidth=1.2)
+        else:
+            prev = layout["exons"][i - 1]
+            ax.plot([prev["end"], exon["start"]],
+                    [body_y + height / 2, body_y + height / 2],
+                    color="#868e96", linewidth=1.2)
+        ax.text((exon["start"] + exon["end"]) / 2, label_y, str(exon["rank"]),
+                ha="center", va="bottom", fontsize=9)
+        for seg in exon["segments"]:
+            seg_start = exon["start"] + ((seg["start"] - 1) / exon["length"]) * exon["width"]
+            seg_end = exon["start"] + (seg["end"] / exon["length"]) * exon["width"]
+            ax.add_patch(Rectangle((seg_start, body_y), max(seg_end - seg_start, 0.8), height,
+                                   facecolor=structure_segment_color(seg["kind"]), edgecolor="none"))
+        ax.add_patch(Rectangle((exon["start"], body_y), exon["width"], height,
+                               facecolor="none", edgecolor="#495057", linewidth=0.8))
+
+    bp_x = _transcript_breakpoint_x(partner, layout)
+    if bp_x is not None:
+        ax.axvline(bp_x, color="#e03131", linestyle="dashed", linewidth=1.5)
+        ax.text(bp_x, 0.94, _transcript_breakpoint_label(partner),
+                ha="center", va="bottom", fontsize=10, fontweight="bold", color="#e03131")
+
+    for spine in ("top", "left", "right"):
+        ax.spines[spine].set_visible(False)
+
+
 def render_domain_diagram_png(
     result: dict,
     *,
@@ -194,13 +273,6 @@ def render_domain_diagram_png(
     three_uniprot: Optional[str] = None,
     title: Optional[str] = None,
 ) -> bytes:
-    """Render the 3-track domain-retention diagram for an ``annotate_fusion()``
-    result and return it as PNG bytes.
-
-    ``result`` is the standard ``{"interface": ..., "resolved": ...}`` dict.
-    Requires matplotlib (``pip install fusion-annotation[docs]``); imported
-    lazily so this stays an opt-in dependency.
-    """
     import io
 
     import matplotlib
@@ -221,18 +293,12 @@ def render_domain_diagram_png(
     hybrid_offset = 1 if iface["hybrid_codon"] else 0
     three_offset = five_last_aa + hybrid_offset - three_first_aa + 1
 
-    # Fusion-protein track: remap each partner's domains onto fusion
-    # coordinates. 5' domains keep their original numbering (the fusion
-    # protein starts with the 5' partner's sequence unchanged up to the
-    # breakpoint). 3' domains shift by a constant offset derived from the
-    # junction. Only domains that survive into the fusion protein (not
-    # LOST) are shown.
     fusion_domains = []
     for d in five_domains:
         if d["status"] == "LOST":
             continue
         fusion_domains.append({"name": d["name"], "status": d["status"],
-                                "start": d["start"], "end": min(d["end"], five_last_aa)})
+                               "start": d["start"], "end": min(d["end"], five_last_aa)})
     for d in three_domains:
         if d["status"] == "LOST":
             continue
@@ -241,9 +307,25 @@ def render_domain_diagram_png(
         fusion_domains.append({"name": d["name"], "status": "RETAINED", "start": start, "end": end})
     fusion_domains.sort(key=lambda d: d["start"])
 
-    fig, axes = plt.subplots(3, 1, figsize=(11, 9.5))
+    tracks = []
+    if resolved["five"].get("structure"):
+        tracks.append(("structure", resolved["five"], f"{five_gene} transcript structure"))
+    tracks.append(("protein", "five"))
+    if resolved["three"].get("structure"):
+        tracks.append(("structure", resolved["three"], f"{three_gene} transcript structure"))
+    tracks.append(("protein", "three"))
+    tracks.append(("fusion", None))
+
+    fig_height = 2.15 * len(tracks) + 1.4
+    fig, axes = plt.subplots(len(tracks), 1, figsize=(11, fig_height))
+    if not isinstance(axes, (list, tuple)):
+        try:
+            axes = list(axes)
+        except TypeError:
+            axes = [axes]
+
     fig.suptitle(
-        title or f"{five_gene}::{three_gene} — chimeric protein & domain retention",
+        title or f"{five_gene}::{three_gene} — transcript structure, chimeric protein & domain retention",
         fontsize=16, fontweight="bold", x=0.02, ha="left", y=0.985)
 
     five_title = f"{five_gene}  (5' partner"
@@ -254,12 +336,6 @@ def render_domain_diagram_png(
     if three_uniprot:
         three_title += f" · {three_uniprot}"
     three_title += f" · {three_len} aa)"
-
-    _draw_track(plt, axes[0], five_title, five_len, five_domains, breakpoint_aa=five_last_aa,
-                breakpoint_label=f"breakpoint aa {five_last_aa}")
-    _draw_track(plt, axes[1], three_title, three_len, three_domains, breakpoint_aa=three_first_aa,
-                breakpoint_label=f"breakpoint aa {three_first_aa}")
-
     if five_last_aa > 0:
         junction = f"junction p.{aa3(iface['five_last_aa_res'])}{five_last_aa}::" \
                    f"{aa3(iface['three_first_aa_res'])}{three_first_aa}"
@@ -269,9 +345,23 @@ def render_domain_diagram_png(
         junction += f"  (hybrid {aa3(iface['junction_residue'])}{five_last_aa + 1})"
     fusion_title = (f"{five_gene}::{three_gene} fusion protein  ({iface['fusion_length']} aa · "
                     f"{iface['frame_status']})")
-    _draw_track(plt, axes[2], fusion_title, iface["fusion_length"], fusion_domains,
-                breakpoint_aa=five_last_aa, junction_label=junction)
-    axes[2].set_xlabel("residue")
+
+    ax_iter = iter(axes)
+    for track in tracks:
+        kind = track[0]
+        ax = next(ax_iter)
+        if kind == "structure":
+            _draw_transcript_track(ax, track[2], track[1])
+        elif kind == "protein" and track[1] == "five":
+            _draw_track(plt, ax, five_title, five_len, five_domains, breakpoint_aa=five_last_aa,
+                        breakpoint_label=f"breakpoint aa {five_last_aa}")
+        elif kind == "protein":
+            _draw_track(plt, ax, three_title, three_len, three_domains, breakpoint_aa=three_first_aa,
+                        breakpoint_label=f"breakpoint aa {three_first_aa}")
+        else:
+            _draw_track(plt, ax, fusion_title, iface["fusion_length"], fusion_domains,
+                        breakpoint_aa=five_last_aa, junction_label=junction)
+            ax.set_xlabel("residue")
 
     plt.tight_layout(rect=(0, 0, 1, 0.97))
     buf = io.BytesIO()

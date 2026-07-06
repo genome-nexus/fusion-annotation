@@ -56,15 +56,15 @@ export function ResultView({ result, permalink }: Props) {
         </dd>
       </dl>
 
-      <h3>Domain retention</h3>
+      <h3>Transcript structure &amp; domain retention</h3>
       <DomainDiagram
         domains={iface.domains}
         fiveGene={iface.five_gene}
         threeGene={iface.three_gene}
+        fivePartner={resolved.five}
+        threePartner={resolved.three}
         fiveLastAa={iface.five_last_aa}
         threeFirstAa={iface.three_first_aa}
-        fiveLength={resolved.five.protein_length}
-        threeLength={resolved.three.protein_length}
         hybridCodon={iface.hybrid_codon}
         fusionLength={iface.fusion_length}
       />
