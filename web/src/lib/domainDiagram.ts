@@ -91,8 +91,11 @@ export function edgeAwareTextPlacement(
 // slightly different boundaries). Rendering every raw record as its own
 // rectangle is illegible, so overlapping same-type records are merged into one
 // representative block, preferring more granular types (repeat > domain >
-// conserved_site) and dropping coarser records once a finer one already covers
-// the same range.
+// conserved_site) and dropping coarser records once a finer one already
+// covers the same range. If a cluster has both curated labels and accession-
+// style fallback names, prefer the curated label; otherwise keep the
+// accession so Pfam-only regions still render. Same algorithm as
+// docs/generate_domain_map.py.
 // ---------------------------------------------------------------------------
 const KEEP_TYPES = new Set(["domain", "repeat", "conserved_site"]);
 const TYPE_PRIORITY = ["repeat", "domain", "conserved_site"];
@@ -138,7 +141,7 @@ function spanOverlapFrac(span: Span, clusters: DomainCall[][]): number {
 }
 
 export function canonicalizeDomains(raw: DomainCall[], gene: string): CanonDomain[] {
-  const items = raw.filter((d) => d.gene === gene && KEEP_TYPES.has(d.type) && d.name !== d.accession);
+  const items = raw.filter((d) => d.gene === gene && KEEP_TYPES.has(d.type));
   const kept: DomainCall[][] = [];
   for (const type of TYPE_PRIORITY) {
     const clusters = clusterByOverlap(items.filter((d) => d.type === type));
@@ -151,7 +154,12 @@ export function canonicalizeDomains(raw: DomainCall[], gene: string): CanonDomai
   const reps = kept.map((c) => {
     const start = Math.min(...c.map((m) => m.start));
     const end = Math.max(...c.map((m) => m.end));
-    const name = c.reduce((shortest, m) => (m.name.length < shortest.length ? m.name : shortest), c[0].name);
+    const preferred = c.filter((m) => m.name !== m.accession);
+    const targets = preferred.length > 0 ? preferred : c;
+    const name = targets.reduce(
+      (shortest, m) => (m.name.length < shortest.length ? m.name : shortest),
+      targets[0].name,
+    );
     const statuses = new Set(c.map((m) => m.status));
     const status: Status =
       statuses.size === 1 && statuses.has("RETAINED")
