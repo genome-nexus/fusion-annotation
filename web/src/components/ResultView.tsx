@@ -1,13 +1,19 @@
+import { useState } from "react";
 import type { AnnotationResult } from "../lib/types";
 import { DomainDiagram } from "./DomainDiagram";
+import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
 
 interface Props {
   result: AnnotationResult;
   permalink: string;
 }
 
+type DiagramView = "domain" | "structure";
+
 export function ResultView({ result, permalink }: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
+  const [diagramView, setDiagramView] = useState<DiagramView>("domain");
+  const hasTranscriptStructure = Boolean(resolved.five.structure || resolved.three.structure);
 
   return (
     <div className="result-view">
@@ -56,18 +62,47 @@ export function ResultView({ result, permalink }: Props) {
         </dd>
       </dl>
 
-      <h3>Transcript structure &amp; domain retention</h3>
-      <DomainDiagram
-        domains={iface.domains}
-        fiveGene={iface.five_gene}
-        threeGene={iface.three_gene}
-        fivePartner={resolved.five}
-        threePartner={resolved.three}
-        fiveLastAa={iface.five_last_aa}
-        threeFirstAa={iface.three_first_aa}
-        hybridCodon={iface.hybrid_codon}
-        fusionLength={iface.fusion_length}
-      />
+      <h3>Visualization</h3>
+      <div className="diagram-toggle" role="tablist" aria-label="Choose visualization">
+        <button
+          type="button"
+          className={diagramView === "domain" ? "diagram-toggle-button active" : "diagram-toggle-button"}
+          aria-pressed={diagramView === "domain"}
+          onClick={() => setDiagramView("domain")}
+        >
+          Domain retention
+        </button>
+        {hasTranscriptStructure && (
+          <button
+            type="button"
+            className={diagramView === "structure" ? "diagram-toggle-button active" : "diagram-toggle-button"}
+            aria-pressed={diagramView === "structure"}
+            onClick={() => setDiagramView("structure")}
+          >
+            Transcript structure
+          </button>
+        )}
+      </div>
+      {diagramView === "domain" ? (
+        <DomainDiagram
+          domains={iface.domains}
+          fiveGene={iface.five_gene}
+          threeGene={iface.three_gene}
+          fiveLastAa={iface.five_last_aa}
+          threeFirstAa={iface.three_first_aa}
+          fiveLength={resolved.five.protein_length}
+          threeLength={resolved.three.protein_length}
+          hybridCodon={iface.hybrid_codon}
+          fusionLength={iface.fusion_length}
+        />
+      ) : (
+        <TranscriptStructureDiagram
+          fiveGene={iface.five_gene}
+          threeGene={iface.three_gene}
+          fivePartner={resolved.five}
+          threePartner={resolved.three}
+        />
+      )}
 
       <table className="domain-table">
         <thead>
