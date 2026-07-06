@@ -203,10 +203,14 @@ def _transcript_breakpoint_x(partner: dict, layout: dict) -> Optional[float]:
     if ctx["region"] == "downstream":
         return layout["width"] - EXON_GAP / 4
     if ctx["intron_rank"] is not None:
+        if not (1 <= ctx["intron_rank"] < len(layout["exons"])):
+            return None
         left = layout["exons"][ctx["intron_rank"] - 1]
         right = layout["exons"][ctx["intron_rank"]]
         return (left["end"] + right["start"]) / 2
     if ctx["exon_rank"] is not None:
+        if not (1 <= ctx["exon_rank"] <= len(layout["exons"])):
+            return None
         exon = layout["exons"][ctx["exon_rank"] - 1]
         if ctx["boundary"] == "before":
             return exon["start"]
