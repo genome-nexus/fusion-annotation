@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { AnnotationResult } from "../lib/types";
 import { DomainDiagram } from "./DomainDiagram";
+import { DomainTable } from "./DomainTable";
 import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
 
 interface Props {
@@ -104,28 +105,7 @@ export function ResultView({ result, permalink }: Props) {
         />
       )}
 
-      <table className="domain-table">
-        <thead>
-          <tr>
-            <th>Status</th>
-            <th>Gene</th>
-            <th>Domain</th>
-            <th>Range</th>
-          </tr>
-        </thead>
-        <tbody>
-          {iface.domains.map((d) => (
-            <tr key={`${d.gene}-${d.accession}-${d.start}-${d.end}`} className={`status-${d.status.toLowerCase()}`}>
-              <td>{d.status}</td>
-              <td>{d.gene}</td>
-              <td>{d.name}</td>
-              <td>
-                {d.start}-{d.end}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <DomainTable domains={iface.domains} />
 
       <h3>Clinical knowledge</h3>
       <dl className="summary-grid">
