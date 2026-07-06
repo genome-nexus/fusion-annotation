@@ -41,7 +41,7 @@ import requests
 
 from .core import Transcript, translate, build_exon_cds_map, build_exon_genomic_map
 from .rest_provider import (
-    normalize_assembly, _request_with_retry, _UA,
+    RestDataProvider, normalize_assembly, _request_with_retry, _UA,
     CIVIC_GRAPHQL, INTERPRO_BASE,
 )
 
@@ -311,6 +311,24 @@ class GenomeNexusDataProvider:
 
         return cds
 
+    def _rest_fallback_transcript(self, tx_id: str, gene_symbol: str,
+                                  is_canonical: Optional[bool]) -> Optional[Transcript]:
+        """Fallback for rare GN transcripts whose assembled CDS is unusable.
+
+        Some GN transcripts expose enough structure to resolve breakpoints and
+        domains, but the assembled UCSC CDS translates to a protein that is far
+        shorter than GN's reported protein length (observed: RAD51, CDH7 on
+        GRCh37). In that narrow case, fall back to Ensembl REST for the same
+        transcript id so downstream annotation can proceed.
+        """
+        try:
+            fallback = RestDataProvider(assembly=self.assembly).get_transcript(tx_id)
+        except Exception:
+            return None
+        fallback.gene_symbol = gene_symbol or fallback.gene_symbol
+        fallback.is_canonical = is_canonical
+        return fallback
+
     # ---- DataProvider protocol --------------------------------------------
 
     def get_transcript(self, gene_or_tx: str) -> Transcript:
@@ -332,6 +350,15 @@ class GenomeNexusDataProvider:
 
         # Validate length against GN's reported proteinLength
         reported_len = tx_data.get("proteinLength")
+        gross_mismatch = (
+            bool(reported_len) and
+            abs(len(protein) - reported_len) > max(30, reported_len // 2)
+        )
+        if gross_mismatch:
+            fallback = self._rest_fallback_transcript(
+                tx_data.get("transcriptId", gene_or_tx), gene_symbol, is_canonical)
+            if fallback is not None:
+                return fallback
         if reported_len and abs(len(protein) - reported_len) > 1:
             # >1 aa difference is unusual — warn but don't abort
             self._domain_warning = (  # reuse the warning slot; callers check it

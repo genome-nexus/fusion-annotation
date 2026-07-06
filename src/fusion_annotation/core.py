@@ -176,8 +176,14 @@ def cds_coord_at_genomic(strand: int, exon_genomic: list[tuple[int, int]],
             upstream_cds_end = c_end
         elif side == "start":                   # first exon entirely downstream (3') of g_pos
             return c_start
-    if side == "end" and upstream_cds_end is not None:
-        return upstream_cds_end
+    if side == "end":
+        if upstream_cds_end is not None:
+            return upstream_cds_end
+        # A 5' partner breakpoint can lie wholly in the 5' UTR/promoter. In
+        # that case the fusion retains zero coding bases from that partner
+        # rather than raising, which is what promoter-swap fusions such as
+        # TMPRSS2::ERG need.
+        return 0
     raise ValueError(f"genomic position {g_pos} does not map into the CDS of this transcript")
 
 
@@ -258,7 +264,12 @@ class FusionProtein:
         Format:  FIVE:p.Met1_<Xaa><n>::THREE:p.<Xaa><m>_<Xaa><end>
         A hybrid junction codon is annotated in a trailing comment.
         """
-        five = f"{self.five_gene}:p.Met1_{aa3(self.five_last_aa_res)}{self.five_last_aa}"
+        if self.five_last_aa > 0:
+            five = f"{self.five_gene}:p.Met1_{aa3(self.five_last_aa_res)}{self.five_last_aa}"
+        else:
+            # Promoter / 5'UTR partner breakpoints can contribute no coding
+            # residues from the 5' partner at all.
+            five = f"{self.five_gene}:p.0"
         end_res = self.fusion_protein_seq[-1] if self.fusion_protein_seq else 'X'
         three = (f"{self.three_gene}:p.{aa3(self.three_first_aa_res)}{self.three_first_aa}_"
                  f"{aa3(end_res)}{self._three_last_aa()}")
@@ -346,7 +357,7 @@ def annotate_effect(five: Transcript, three: Transcript,
         five_gene=five.gene_symbol, three_gene=three.gene_symbol,
         five_transcript=five.transcript_id, three_transcript=three.transcript_id,
         five_last_aa=five_last_aa, three_first_aa=three_first_aa,
-        five_last_aa_res=five.protein[five_last_aa - 1] if five_last_aa <= len(five.protein) else 'X',
+        five_last_aa_res=five.protein[five_last_aa - 1] if 0 < five_last_aa <= len(five.protein) else 'X',
         three_first_aa_res=three.protein[three_first_aa - 1] if three_first_aa <= len(three.protein) else 'X',
         in_frame=in_frame, hybrid_codon=hybrid, junction_residue=junction_res,
         fusion_length=len(core), internal_stops=internal_stops,
@@ -424,6 +435,9 @@ def annotate_fusion(provider: DataProvider,
     breakpoint was interpreted are echoed back under ``resolved``; a ``warnings``
     list flags a known oncogenic pair that reconstructs out-of-frame.
     """
+    if hasattr(provider, "_domain_warning"):
+        provider._domain_warning = None
+
     # Parallelise the two independent partner lookups (each may involve several
     # network round-trips; doing them concurrently roughly halves this phase).
     with ThreadPoolExecutor(max_workers=2) as pool:

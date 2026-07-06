@@ -391,6 +391,65 @@ class TestGNProviderMocked:
         # the key assertion is no exception raised)
         assert p2._domain_warning is not None or doms == []
 
+    def test_zero_length_gn_translation_falls_back_to_rest_transcript(self):
+        p = GenomeNexusDataProvider(assembly="GRCh37", interpro_enrichment=False)
+        alk_raw = dict(_FX["gn_raw"]["grch38"]["ALK"])
+        alk_raw["proteinLength"] = 339  # non-zero so the fallback path activates
+        fallback = Transcript(
+            gene_symbol="RAD51",
+            gene_id="5888",
+            transcript_id="ENST00000382643",
+            strand=1,
+            cds="ATGGCCATG",
+            protein="MAM",
+            uniprot="Q06609",
+            exon_cds=[(1, 9)],
+            exon_genomic=[(1, 9)],
+            cds_g_start=1,
+            cds_g_end=9,
+            is_canonical=True,
+        )
+
+        with patch.object(p, "_fetch_gn_tx", return_value=(alk_raw, True)), \
+             patch.object(p, "_fetch_cds_sequence", return_value="TGA"), \
+             patch.object(p, "_rest_fallback_transcript", return_value=fallback) as fallback_mock:
+            tx = p.get_transcript("RAD51")
+
+        fallback_mock.assert_called_once()
+        assert tx.transcript_id == "ENST00000382643"
+        assert tx.protein == "MAM"
+        assert tx.gene_symbol == "RAD51"
+        assert tx.is_canonical is True
+
+    def test_gross_protein_length_mismatch_falls_back_to_rest_transcript(self):
+        p = GenomeNexusDataProvider(assembly="GRCh37", interpro_enrichment=False)
+        alk_raw = dict(_FX["gn_raw"]["grch38"]["ALK"])
+        alk_raw["proteinLength"] = 785
+        fallback = Transcript(
+            gene_symbol="CDH7",
+            gene_id="1005",
+            transcript_id="ENST00000323011",
+            strand=1,
+            cds="ATGGCCATG",
+            protein="MAM",
+            uniprot="Q9P2E7",
+            exon_cds=[(1, 9)],
+            exon_genomic=[(1, 9)],
+            cds_g_start=1,
+            cds_g_end=9,
+            is_canonical=True,
+        )
+
+        with patch.object(p, "_fetch_gn_tx", return_value=(alk_raw, True)), \
+             patch.object(p, "_fetch_cds_sequence", return_value="ATGTAG"), \
+             patch.object(p, "_rest_fallback_transcript", return_value=fallback) as fallback_mock:
+            tx = p.get_transcript("CDH7")
+
+        fallback_mock.assert_called_once()
+        assert tx.transcript_id == "ENST00000323011"
+        assert tx.protein == "MAM"
+        assert tx.gene_symbol == "CDH7"
+
 
 # ---------------------------------------------------------------------------
 # Protein-length mismatch warning
@@ -410,7 +469,8 @@ def test_protein_length_mismatch_warning():
         return _FX["grch38"]["ALK"]["cds"]
 
     with patch.object(p, "_fetch_gn_tx", side_effect=_fake_fetch), \
-         patch.object(p, "_fetch_cds_sequence", side_effect=_fake_cds):
+         patch.object(p, "_fetch_cds_sequence", side_effect=_fake_cds), \
+         patch.object(p, "_rest_fallback_transcript", return_value=None):
         tx = p.get_transcript("ALK")
 
     assert p._domain_warning is not None
@@ -444,6 +504,31 @@ def test_rest_provider_interpro_degradation():
 def test_domain_warning_surfaced_in_warnings():
     """Provider._domain_warning must appear in annotate_fusion(...)['warnings']."""
     provider = _make_static_from_gn_fixture("grch38")
-    provider._domain_warning = "InterPro enrichment unavailable for Q9HC35"
+    original_get_domains = provider.get_domains
+
+    def _warn_get_domains(uniprot):
+        provider._domain_warning = "InterPro enrichment unavailable for Q9HC35"
+        return original_get_domains(uniprot)
+
+    provider.get_domains = _warn_get_domains
     r = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
     assert any("InterPro" in w for w in r["warnings"])
+
+
+def test_domain_warning_does_not_leak_between_calls():
+    provider = _make_static_from_gn_fixture("grch38")
+    original_get_domains = provider.get_domains
+    warned = {"done": False}
+
+    def _warn_once(uniprot):
+        if not warned["done"]:
+            provider._domain_warning = "first-call warning"
+            warned["done"] = True
+        return original_get_domains(uniprot)
+
+    provider.get_domains = _warn_once
+    first = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
+    second = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
+
+    assert "first-call warning" in first["warnings"]
+    assert second["warnings"] == []

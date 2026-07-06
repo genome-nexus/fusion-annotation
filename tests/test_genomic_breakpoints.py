@@ -8,7 +8,7 @@ import os
 import pytest
 
 from fusion_annotation import (
-    Transcript, build_exon_cds_map, build_exon_genomic_map, annotate_fusion,
+    Transcript, build_exon_cds_map, build_exon_genomic_map, annotate_effect, annotate_fusion,
     cds_coord_at_exon_boundary, cds_coord_at_genomic, parse_genomic_breakpoint,
 )
 from fusion_annotation.providers import StaticProvider
@@ -94,6 +94,55 @@ def test_genomic_position_outside_cds_raises(provider):
     with pytest.raises(ValueError):
         cds_coord_at_genomic(alk.strand, alk.exon_genomic, alk.cds_g_start,
                              alk.cds_g_end, alk.cds_g_start - 10_000_000, "start")
+
+
+def test_five_prime_utr_breakpoint_maps_to_zero_coding_bases_plus_strand():
+    # First exon includes 10 nt of 5'UTR before the CDS starts.
+    exon_genomic = [(100, 120), (200, 220)]
+    assert cds_coord_at_genomic(
+        strand=1,
+        exon_genomic=exon_genomic,
+        cds_g_start=110,
+        cds_g_end=220,
+        g_pos=105,
+        side="end",
+    ) == 0
+
+
+def test_five_prime_utr_breakpoint_maps_to_zero_coding_bases_minus_strand():
+    # Minus strand: the first exon in transcription order is the higher one,
+    # and its high-coordinate segment is 5'UTR before the CDS begins.
+    exon_genomic = [(200, 220), (100, 120)]
+    assert cds_coord_at_genomic(
+        strand=-1,
+        exon_genomic=exon_genomic,
+        cds_g_start=100,
+        cds_g_end=210,
+        g_pos=215,
+        side="end",
+    ) == 0
+
+
+def test_zero_aa_five_prime_partner_formats_hgvsp_cleanly():
+    five = Transcript(
+        gene_symbol="TMPRSS2",
+        gene_id="g1",
+        transcript_id="tx1",
+        strand=-1,
+        cds="ATGAAA",
+        protein="MK",
+    )
+    three = Transcript(
+        gene_symbol="ERG",
+        gene_id="g2",
+        transcript_id="tx2",
+        strand=-1,
+        cds="ATGGAGGACTACTGA",
+        protein="MEDY",
+    )
+    fp = annotate_effect(five, three, five_cds_end=0, three_cds_start=1)
+    assert fp.five_last_aa == 0
+    assert fp.to_hgvsp().startswith("TMPRSS2:p.0::ERG:p.Met1_")
 
 
 # ---- transcript echo / pinning --------------------------------------------

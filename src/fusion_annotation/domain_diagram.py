@@ -260,8 +260,11 @@ def render_domain_diagram_png(
     _draw_track(plt, axes[1], three_title, three_len, three_domains, breakpoint_aa=three_first_aa,
                 breakpoint_label=f"breakpoint aa {three_first_aa}")
 
-    junction = f"junction p.{aa3(iface['five_last_aa_res'])}{five_last_aa}::" \
-               f"{aa3(iface['three_first_aa_res'])}{three_first_aa}"
+    if five_last_aa > 0:
+        junction = f"junction p.{aa3(iface['five_last_aa_res'])}{five_last_aa}::" \
+                   f"{aa3(iface['three_first_aa_res'])}{three_first_aa}"
+    else:
+        junction = f"junction p.0::{aa3(iface['three_first_aa_res'])}{three_first_aa}"
     if iface["hybrid_codon"] and iface.get("junction_residue"):
         junction += f"  (hybrid {aa3(iface['junction_residue'])}{five_last_aa + 1})"
     fusion_title = (f"{five_gene}::{three_gene} fusion protein  ({iface['fusion_length']} aa · "
