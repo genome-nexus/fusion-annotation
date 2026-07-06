@@ -71,9 +71,25 @@ def _span_overlap_frac(span, clusters):
 
 
 def canonicalize_domains(raw_domains, gene):
+    """Collapse the raw, highly redundant per-source domain hits for one gene
+    into a small set of representative blocks.
+
+    Genome Nexus returns many overlapping InterPro/Pfam records describing
+    the same physical domain (different databases, different exact
+    boundaries). We keep ``domain``/``repeat``/``conserved_site`` type
+    records, cluster each type separately by overlap, and — most
+    specific/granular first (repeat, then domain, then conserved_site) —
+    drop any later cluster that is >=50% covered by an already-kept cluster
+    (a coarser "superfamily-ish" or sub-feature re-annotation of the same
+    region, e.g. the tiny "ATP binding site" motif fully inside the already-
+    kept kinase domain block). When a cluster contains both curated labels
+    and bare accessions (e.g. Pfam-only fallback names), we prefer the
+    curated label; if a cluster only has accession-style names, we keep one
+    of them so the region still renders instead of silently disappearing.
+    """
     KEEP_TYPES = {"domain", "repeat", "conserved_site"}
     items = [d for d in raw_domains
-             if d["gene"] == gene and d["type"] in KEEP_TYPES and d["name"] != d["accession"]]
+             if d["gene"] == gene and d["type"] in KEEP_TYPES]
 
     kept = []
     for type_ in ("repeat", "domain", "conserved_site"):
@@ -87,7 +103,8 @@ def canonicalize_domains(raw_domains, gene):
     for cluster in kept:
         start = min(m["start"] for m in cluster)
         end = max(m["end"] for m in cluster)
-        name = min((m["name"] for m in cluster), key=len)
+        preferred = [m for m in cluster if m["name"] != m["accession"]]
+        name = min((m["name"] for m in (preferred or cluster)), key=len)
         statuses = {m["status"] for m in cluster}
         if statuses == {"RETAINED"}:
             status = "RETAINED"
