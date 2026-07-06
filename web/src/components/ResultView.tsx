@@ -105,11 +105,18 @@ export function ResultView({ result, permalink }: Props) {
       )}
 
       <table className="domain-table">
+        <caption className="domain-table-caption">
+          Raw domain calls from InterPro/Pfam — the diagram merges overlapping
+          entries of the same region and only renders{" "}
+          <em>domain</em>, <em>repeat</em>, and <em>conserved_site</em> types.
+        </caption>
         <thead>
           <tr>
             <th>Status</th>
             <th>Gene</th>
             <th>Domain</th>
+            <th>Accession</th>
+            <th>Type</th>
             <th>Range</th>
           </tr>
         </thead>
@@ -119,9 +126,9 @@ export function ResultView({ result, permalink }: Props) {
               <td>{d.status}</td>
               <td>{d.gene}</td>
               <td>{d.name}</td>
-              <td>
-                {d.start}-{d.end}
-              </td>
+              <td><code>{d.accession}</code></td>
+              <td>{d.type}</td>
+              <td>{d.start}–{d.end}</td>
             </tr>
           ))}
         </tbody>

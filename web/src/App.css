@@ -284,6 +284,14 @@ header .tagline {
   font-size: 0.9rem;
 }
 
+.domain-table-caption {
+  caption-side: top;
+  text-align: left;
+  font-size: 0.8rem;
+  color: #868e96;
+  padding: 0 0 6px;
+}
+
 .domain-table th,
 .domain-table td {
   text-align: left;
