@@ -20,6 +20,7 @@ PROMOTER_WIDTH = 34.0
 EXON_GAP = 12.0
 EXON_MIN_WIDTH = 18.0
 EXON_MAX_WIDTH = 34.0
+LABEL_HALF_WIDTH_SCALE = 0.007
 
 
 def color_for(name: str) -> str:
@@ -112,7 +113,7 @@ def _label_rows(domains, protein_len):
     placements = []
     for g in groups:
         center = (g["start"] + g["end"]) / 2
-        half_width = len(g["name"]) * protein_len * 0.0055
+        half_width = len(g["name"]) * protein_len * LABEL_HALF_WIDTH_SCALE
         row = 0
         while row < len(row_free_at) and row_free_at[row] > center - half_width:
             row += 1
@@ -122,6 +123,15 @@ def _label_rows(domains, protein_len):
             row_free_at[row] = center + half_width
         placements.append((center, row, g["name"]))
     return placements
+
+
+def _edge_text_position(center: float, text: str, span: float) -> tuple[float, str]:
+    half_width = len(text) * span * LABEL_HALF_WIDTH_SCALE
+    if center - half_width < 0:
+        return 0.0, "left"
+    if center + half_width > span:
+        return span, "right"
+    return center, "center"
 
 
 def _draw_track(plt_module, ax, label, protein_len, domains, breakpoint_aa=None,
@@ -142,15 +152,20 @@ def _draw_track(plt_module, ax, label, protein_len, domains, breakpoint_aa=None,
         ax.add_patch(Rectangle((d["start"], 0.3), width, 0.4, facecolor=color_for(d["name"]),
                                edgecolor="black", linewidth=0.6, alpha=alpha, linestyle=linestyle))
     for center, row, name in placements:
-        ax.text(center, 0.78 + row * 0.28, name, ha="center", va="bottom", fontsize=9)
+        text_x, ha = _edge_text_position(center, name, protein_len)
+        ax.text(text_x, 0.78 + row * 0.28, name, ha=ha, va="bottom", fontsize=9, clip_on=False)
     if breakpoint_aa is not None:
         ax.axvline(breakpoint_aa, color="#e03131", linestyle="dashed", linewidth=1.5)
         if breakpoint_label:
-            ax.text(breakpoint_aa, top + 0.08, breakpoint_label, ha="center", va="bottom",
-                    fontsize=10, fontweight="bold", color="#e03131")
+            text_x, ha = _edge_text_position(breakpoint_aa, breakpoint_label, protein_len)
+            ax.text(text_x, top + 0.08, breakpoint_label, ha=ha, va="bottom",
+                    fontsize=10, fontweight="bold", color="#e03131", clip_on=False)
         if junction_label:
+            label_x = breakpoint_aa + protein_len * 0.12
+            if label_x > protein_len * 0.82:
+                label_x = max(protein_len * 0.18, breakpoint_aa - protein_len * 0.12)
             ax.annotate(junction_label, xy=(breakpoint_aa, 0.7),
-                        xytext=(breakpoint_aa + protein_len * 0.12, top + 0.08),
+                        xytext=(label_x, top + 0.08),
                         fontsize=10, fontweight="bold", color="#e03131",
                         arrowprops=dict(arrowstyle="-", color="#e03131", linewidth=1))
     ax.set_yticks([])
@@ -229,8 +244,12 @@ def _draw_transcript_track(ax, label: str, partner: dict):
     ax.set_yticks([])
     ax.set_title(f"{label}  ({partner['transcript']} · {strand})", loc="left", fontsize=13, pad=18)
 
-    ax.text((layout["promoter_start"] + layout["promoter_end"]) / 2, label_y, "promoter",
-            ha="center", va="bottom", fontsize=9)
+    promoter_x, promoter_ha = _edge_text_position(
+        (layout["promoter_start"] + layout["promoter_end"]) / 2,
+        "promoter",
+        layout["width"],
+    )
+    ax.text(promoter_x, label_y, "promoter", ha=promoter_ha, va="bottom", fontsize=9, clip_on=False)
     ax.add_patch(Rectangle((layout["promoter_start"], body_y),
                            layout["promoter_end"] - layout["promoter_start"], height,
                            facecolor="#fff3bf", edgecolor="#c92a2a",
@@ -247,7 +266,7 @@ def _draw_transcript_track(ax, label: str, partner: dict):
                     [body_y + height / 2, body_y + height / 2],
                     color="#868e96", linewidth=1.2)
         ax.text((exon["start"] + exon["end"]) / 2, label_y, str(exon["rank"]),
-                ha="center", va="bottom", fontsize=9)
+                ha="center", va="bottom", fontsize=9, clip_on=False)
         for seg in exon["segments"]:
             seg_start = exon["start"] + ((seg["start"] - 1) / exon["length"]) * exon["width"]
             seg_end = exon["start"] + (seg["end"] / exon["length"]) * exon["width"]
@@ -259,8 +278,10 @@ def _draw_transcript_track(ax, label: str, partner: dict):
     bp_x = _transcript_breakpoint_x(partner, layout)
     if bp_x is not None:
         ax.axvline(bp_x, color="#e03131", linestyle="dashed", linewidth=1.5)
-        ax.text(bp_x, 0.94, _transcript_breakpoint_label(partner),
-                ha="center", va="bottom", fontsize=10, fontweight="bold", color="#e03131")
+        bp_label = _transcript_breakpoint_label(partner)
+        text_x, ha = _edge_text_position(bp_x, bp_label, layout["width"])
+        ax.text(text_x, 1.07, bp_label,
+                ha=ha, va="bottom", fontsize=10, fontweight="bold", color="#e03131", clip_on=False)
 
     for spine in ("top", "left", "right"):
         ax.spines[spine].set_visible(False)

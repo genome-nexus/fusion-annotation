@@ -1,4 +1,5 @@
 import {
+  edgeAwareTextPlacement,
   layoutTranscriptStructure,
   structureSegmentColor,
   transcriptBreakpointLabel,
@@ -40,18 +41,25 @@ function TranscriptTrack({
 
   const layout = layoutTranscriptStructure(partner.structure);
   const scale = (pos: number) => MARGIN + (pos / Math.max(layout.width, 1)) * TRACK_WIDTH;
+  const maxX = MARGIN + TRACK_WIDTH;
   const bodyY = TRACK_TOP_PAD + STRUCTURE_LABEL_ROW;
   const breakpointX = transcriptBreakpointPosition(partner, layout);
   const breakpointLabel = transcriptBreakpointLabel(partner);
   const strandLabel = partner.structure.strand === 1 ? "+ strand" : "- strand";
+  const promoterPlacement = edgeAwareTextPlacement(
+    scale((layout.promoterStart + layout.promoterEnd) / 2),
+    "promoter",
+    MARGIN,
+    maxX,
+  );
 
   return (
     <g transform={`translate(0, ${y})`}>
       <text x={MARGIN} y={-6} className="track-label">
         {label} <tspan className="track-sublabel">({partner.transcript} · {strandLabel})</tspan>
       </text>
-      <text x={scale((layout.promoterStart + layout.promoterEnd) / 2)} y={bodyY - 6}
-            className="domain-label" textAnchor="middle">
+      <text x={promoterPlacement.x} y={bodyY - 6}
+            className="domain-label" textAnchor={promoterPlacement.anchor}>
         promoter
       </text>
       <rect
@@ -132,10 +140,15 @@ function TranscriptTrack({
             strokeWidth={2}
             strokeDasharray="4,3"
           />
-          <text x={scale(breakpointX)} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
-                textAnchor="middle">
-            {breakpointLabel}
-          </text>
+          {(() => {
+            const placement = edgeAwareTextPlacement(scale(breakpointX), breakpointLabel, MARGIN, maxX);
+            return (
+              <text x={placement.x} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
+                    textAnchor={placement.anchor}>
+                {breakpointLabel}
+              </text>
+            );
+          })()}
         </>
       )}
     </g>

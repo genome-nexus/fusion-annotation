@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { canonicalizeDomains, colorFor, labelRows, type CanonDomain, type Status } from "../lib/domainDiagram";
+import {
+  canonicalizeDomains,
+  colorFor,
+  edgeAwareTextPlacement,
+  labelRows,
+  type CanonDomain,
+  type Status,
+} from "../lib/domainDiagram";
 import type { DomainCall } from "../lib/types";
 
 interface Props {
@@ -40,6 +47,7 @@ function ProteinTrack({
   onHover: (d: CanonDomain | null) => void;
 }) {
   const scale = (aa: number) => MARGIN + (aa / Math.max(proteinLength, 1)) * TRACK_WIDTH;
+  const maxX = MARGIN + TRACK_WIDTH;
   const rows = labelRows(domains, proteinLength);
   const nRows = Math.max(0, ...rows.map((r) => r.row + 1));
   const bodyY = TRACK_TOP_PAD + nRows * LABEL_ROW_HEIGHT;
@@ -49,17 +57,20 @@ function ProteinTrack({
       <text x={MARGIN} y={-6} className="track-label">
         {label} <tspan className="track-sublabel">({proteinLength} aa)</tspan>
       </text>
-      {rows.map((r) => (
-        <text
-          key={`${r.name}-${r.center}`}
-          x={scale(r.center)}
-          y={bodyY - 4 - r.row * LABEL_ROW_HEIGHT}
-          className="domain-label"
-          textAnchor="middle"
-        >
-          {r.name}
-        </text>
-      ))}
+      {rows.map((r) => {
+        const placement = edgeAwareTextPlacement(scale(r.center), r.name, MARGIN, maxX);
+        return (
+          <text
+            key={`${r.name}-${r.center}`}
+            x={placement.x}
+            y={bodyY - 4 - r.row * LABEL_ROW_HEIGHT}
+            className="domain-label"
+            textAnchor={placement.anchor}
+          >
+            {r.name}
+          </text>
+        );
+      })}
       <rect x={MARGIN} y={bodyY} width={TRACK_WIDTH} height={TRACK_HEIGHT} rx={4}
             fill="#e9ecef" stroke="#ced4da" />
       {domains.map((d) => {
@@ -92,12 +103,15 @@ function ProteinTrack({
         <>
           <line x1={scale(breakpointAa)} x2={scale(breakpointAa)} y1={bodyY - 6} y2={bodyY + TRACK_HEIGHT + 6}
                 stroke="#e03131" strokeWidth={2} strokeDasharray="4,3" />
-          {breakpointLabel && (
-            <text x={scale(breakpointAa)} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
-                  textAnchor="middle">
-              {breakpointLabel}
-            </text>
-          )}
+          {breakpointLabel && (() => {
+            const placement = edgeAwareTextPlacement(scale(breakpointAa), breakpointLabel, MARGIN, maxX);
+            return (
+              <text x={placement.x} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
+                    textAnchor={placement.anchor}>
+                {breakpointLabel}
+              </text>
+            );
+          })()}
         </>
       )}
     </g>

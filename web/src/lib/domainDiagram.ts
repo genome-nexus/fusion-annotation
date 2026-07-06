@@ -48,6 +48,8 @@ const PROMOTER_WIDTH = 34;
 const EXON_GAP = 12;
 const EXON_MIN_WIDTH = 18;
 const EXON_MAX_WIDTH = 34;
+const LABEL_HALF_WIDTH_SCALE = 0.007;
+const EDGE_LABEL_CHAR_WIDTH = 4.2;
 
 function hashString(s: string): number {
   let h = 0;
@@ -69,6 +71,18 @@ export function structureSegmentColor(kind: "utr5" | "coding" | "utr3"): string 
   if (kind === "coding") return "#4c6ef5";
   if (kind === "utr5") return "#a5d8ff";
   return "#d0ebff";
+}
+
+export function edgeAwareTextPlacement(
+  x: number,
+  text: string,
+  minX: number,
+  maxX: number,
+): { x: number; anchor: "start" | "middle" | "end" } {
+  const halfWidth = (text.length * EDGE_LABEL_CHAR_WIDTH) / 2;
+  if (x - halfWidth < minX) return { x: minX + 2, anchor: "start" };
+  if (x + halfWidth > maxX) return { x: maxX - 2, anchor: "end" };
+  return { x, anchor: "middle" };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +241,7 @@ export function labelRows(domains: CanonDomain[], proteinLength: number) {
   const rowFreeAt: number[] = [];
   return groups.map((g) => {
     const center = (g.start + g.end) / 2;
-    const halfWidth = g.name.length * proteinLength * 0.0055;
+    const halfWidth = g.name.length * proteinLength * LABEL_HALF_WIDTH_SCALE;
     let row = 0;
     while (row < rowFreeAt.length && rowFreeAt[row] > center - halfWidth) row++;
     if (row === rowFreeAt.length) rowFreeAt.push(center + halfWidth);
