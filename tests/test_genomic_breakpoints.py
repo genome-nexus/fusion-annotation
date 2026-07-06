@@ -150,7 +150,10 @@ def test_resolved_echoes_transcript_and_source(provider):
     r = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
     assert r["resolved"]["five"]["transcript"] == "ENST00000318522"
     assert r["resolved"]["five"]["transcript_source"] == "canonical"
-    assert r["resolved"]["five"]["breakpoint"] == {"type": "exon", "exon": 13, "cds_coord": 1489}
+    assert r["resolved"]["five"]["breakpoint"]["type"] == "exon"
+    assert r["resolved"]["five"]["breakpoint"]["exon"] == 13
+    assert r["resolved"]["five"]["breakpoint"]["cds_coord"] == 1489
+    assert r["resolved"]["five"]["breakpoint"]["context"]["label"] == "after exon 13"
 
 
 def test_resolved_marks_user_specified_transcript(provider):
@@ -166,6 +169,22 @@ def test_resolved_echoes_full_protein_length(provider):
     r = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
     assert r["resolved"]["five"]["protein_length"] == len(provider.get_transcript("EML4").protein)
     assert r["resolved"]["three"]["protein_length"] == len(provider.get_transcript("ALK").protein)
+
+
+def test_resolved_includes_transcript_structure_and_boundary_context(provider):
+    r = annotate_fusion(provider, "EML4", "ALK", five_exon=13, three_exon=20)
+    five = r["resolved"]["five"]
+    three = r["resolved"]["three"]
+
+    assert five["structure"]["strand"] == 1
+    assert five["structure"]["exons"][12]["rank"] == 13
+    assert five["structure"]["exons"][12]["segments"]
+    assert five["breakpoint"]["context"]["region"] == "exon_boundary"
+    assert five["breakpoint"]["context"]["label"] == "after exon 13"
+
+    assert three["structure"]["strand"] == -1
+    assert three["breakpoint"]["context"]["region"] == "exon_boundary"
+    assert three["breakpoint"]["context"]["label"] == "before exon 20"
 
 
 # ---- sanity flag on a known oncogenic pair --------------------------------

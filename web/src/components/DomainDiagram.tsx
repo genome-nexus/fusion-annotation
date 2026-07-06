@@ -1,5 +1,12 @@
 import { useState } from "react";
-import { canonicalizeDomains, colorFor, labelRows, type CanonDomain, type Status } from "../lib/domainDiagram";
+import {
+  canonicalizeDomains,
+  colorFor,
+  edgeAwareTextPlacement,
+  labelRows,
+  type CanonDomain,
+  type Status,
+} from "../lib/domainDiagram";
 import type { DomainCall } from "../lib/types";
 
 interface Props {
@@ -20,17 +27,8 @@ const LABEL_ROW_HEIGHT = 14;
 const MARGIN = 16;
 const TRACK_TOP_PAD = 22;
 const TRACK_BOTTOM_PAD = 14;
-// Space reserved above the first track for its title text. The title is
-// drawn at a negative y offset relative to its own track group (see
-// ProteinTrack), so the diagram's starting y-offset must be tall enough
-// that the title's glyph ascenders don't get clipped by the SVG viewBox's
-// top edge (y=0) — a 12px/600-weight label needs ~17px of headroom above
-// its baseline.
 const TITLE_SPACE = 20;
 
-/** One protein track: a grey full-length backbone, colored domain rectangles
- * on top (color = domain category, opacity/border = retention status), a
- * junction marker at the breakpoint residue, and staggered domain labels. */
 function ProteinTrack({
   label,
   proteinLength,
@@ -49,6 +47,7 @@ function ProteinTrack({
   onHover: (d: CanonDomain | null) => void;
 }) {
   const scale = (aa: number) => MARGIN + (aa / Math.max(proteinLength, 1)) * TRACK_WIDTH;
+  const maxX = MARGIN + TRACK_WIDTH;
   const rows = labelRows(domains, proteinLength);
   const nRows = Math.max(0, ...rows.map((r) => r.row + 1));
   const bodyY = TRACK_TOP_PAD + nRows * LABEL_ROW_HEIGHT;
@@ -58,18 +57,20 @@ function ProteinTrack({
       <text x={MARGIN} y={-6} className="track-label">
         {label} <tspan className="track-sublabel">({proteinLength} aa)</tspan>
       </text>
-      {rows.map((r) => (
-        <text
-          key={`${r.name}-${r.center}`}
-          x={scale(r.center)}
-          y={bodyY - 4 - r.row * LABEL_ROW_HEIGHT}
-          className="domain-label"
-          textAnchor="middle"
-        >
-          {r.name}
-        </text>
-      ))}
-      {/* backbone */}
+      {rows.map((r) => {
+        const placement = edgeAwareTextPlacement(scale(r.center), r.name, MARGIN, maxX);
+        return (
+          <text
+            key={`${r.name}-${r.center}`}
+            x={placement.x}
+            y={bodyY - 4 - r.row * LABEL_ROW_HEIGHT}
+            className="domain-label"
+            textAnchor={placement.anchor}
+          >
+            {r.name}
+          </text>
+        );
+      })}
       <rect x={MARGIN} y={bodyY} width={TRACK_WIDTH} height={TRACK_HEIGHT} rx={4}
             fill="#e9ecef" stroke="#ced4da" />
       {domains.map((d) => {
@@ -102,12 +103,15 @@ function ProteinTrack({
         <>
           <line x1={scale(breakpointAa)} x2={scale(breakpointAa)} y1={bodyY - 6} y2={bodyY + TRACK_HEIGHT + 6}
                 stroke="#e03131" strokeWidth={2} strokeDasharray="4,3" />
-          {breakpointLabel && (
-            <text x={scale(breakpointAa)} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
-                  textAnchor="middle">
-              {breakpointLabel}
-            </text>
-          )}
+          {breakpointLabel && (() => {
+            const placement = edgeAwareTextPlacement(scale(breakpointAa), breakpointLabel, MARGIN, maxX);
+            return (
+              <text x={placement.x} y={bodyY + TRACK_HEIGHT + 20} className="breakpoint-label"
+                    textAnchor={placement.anchor}>
+                {breakpointLabel}
+              </text>
+            );
+          })()}
         </>
       )}
     </g>
@@ -120,10 +124,6 @@ function trackHeight(domains: CanonDomain[], proteinLength: number, hasBreakpoin
   return TRACK_TOP_PAD + nRows * LABEL_ROW_HEIGHT + TRACK_HEIGHT + TRACK_BOTTOM_PAD + (hasBreakpointLabel ? 6 : 0);
 }
 
-/** Interactive SVG domain-retention diagram — the in-browser equivalent of
- * docs/fusion_domain_map.png: one track each for the 5' partner, the 3'
- * partner, and the fused protein itself, with domains colored consistently
- * by category everywhere and retention status shown via opacity/dashing. */
 export function DomainDiagram({
   domains,
   fiveGene,
@@ -140,11 +140,6 @@ export function DomainDiagram({
   const fiveDomains = canonicalizeDomains(domains, fiveGene);
   const threeDomains = canonicalizeDomains(domains, threeGene);
 
-  // Fusion-protein track: remap each partner's domains onto fusion
-  // coordinates. 5' domains keep their original numbering (unchanged up to
-  // the breakpoint); 3' domains shift by a constant offset derived from the
-  // junction. Only domains that actually survive into the fusion protein are
-  // shown — LOST domains are, by definition, entirely absent from it.
   const threeOffset = fiveLastAa + (hybridCodon ? 1 : 0) - threeFirstAa + 1;
   const fusionDomains: CanonDomain[] = [
     ...fiveDomains
