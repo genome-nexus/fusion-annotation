@@ -154,11 +154,20 @@ class RestDataProvider:
         except Exception:
             pass
 
+        # Ensembl lookup responses include seq_region_name (e.g. "7", "X"); normalise
+        # to UCSC format ("chr7", "chrX") for consistency with the GN provider.
+        raw_chrom = rec.get("seq_region_name")
+        if raw_chrom:
+            chrom = "chrM" if raw_chrom.upper() == "MT" else f"chr{raw_chrom}"
+        else:
+            chrom = None
+
         return Transcript(
             gene_symbol=gene_symbol, gene_id=gene_id, transcript_id=rec["id"],
             strand=rec["strand"], cds=cds, protein=prot, uniprot=uniprot,
             exon_cds=exon_cds, exon_genomic=exon_genomic,
-            cds_g_start=tr["start"], cds_g_end=tr["end"], is_canonical=is_canonical)
+            cds_g_start=tr["start"], cds_g_end=tr["end"], is_canonical=is_canonical,
+            chrom=chrom)
 
     # ---- Layer 1: domains --------------------------------------------------
     def get_domains(self, uniprot: str) -> list[dict]:

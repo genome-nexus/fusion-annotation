@@ -6,6 +6,7 @@ import { ResultView } from "./components/ResultView";
 import { VersionFootnote } from "./components/VersionFootnote";
 import { annotateFusion, toSearchParams } from "./lib/api";
 import { DEFAULT_PARAMS } from "./lib/defaultParams";
+import { computeDerivedInputs, type DerivedInputs } from "./lib/derivedInputs";
 import type { AnnotateParams, AnnotationResult, ApiError } from "./lib/types";
 
 /** Read the current URL's query string into AnnotateParams — the other half
@@ -17,7 +18,7 @@ function paramsFromLocation(): AnnotateParams {
   const params = { ...DEFAULT_PARAMS };
   for (const key of Object.keys(params) as (keyof AnnotateParams)[]) {
     const value = search.get(key);
-    if (value !== null) params[key] = value;
+    if (value !== null) (params as Record<string, unknown>)[key] = value;
   }
   return params;
 }
@@ -25,6 +26,7 @@ function paramsFromLocation(): AnnotateParams {
 function App() {
   const [formValues, setFormValues] = useState<AnnotateParams>(paramsFromLocation);
   const [result, setResult] = useState<AnnotationResult | null>(null);
+  const [derived, setDerived] = useState<DerivedInputs | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const [permalink, setPermalink] = useState(window.location.href);
@@ -42,6 +44,7 @@ function App() {
     setLoading(true);
     setError(null);
     setResult(null);
+    setDerived(null);
 
     if (shouldPushState) {
       // Write inputs to the URL query string *before* the request resolves,
@@ -60,6 +63,7 @@ function App() {
       const annotation = await annotateFusion(params, controller.signal);
       if (requestSequence.current !== requestId) return;
       setResult(annotation);
+      setDerived(computeDerivedInputs(annotation));
     } catch (err) {
       if (controller.signal.aborted || requestSequence.current !== requestId) return;
       setResult(null);
@@ -112,7 +116,7 @@ function App() {
 
       <ExampleFusions onSelect={runAnnotation} disabled={loading} />
 
-      <FusionForm initial={formValues} onSubmit={runAnnotation} loading={loading} />
+      <FusionForm initial={formValues} derived={derived} onSubmit={runAnnotation} loading={loading} />
 
       {error && (
         <div className="error-box">
