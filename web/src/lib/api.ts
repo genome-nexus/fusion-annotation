@@ -37,9 +37,12 @@ function formatDetail(detail: unknown, fallback: string): string {
   return fallback;
 }
 
-export async function annotateFusion(params: AnnotateParams): Promise<AnnotationResult> {
+export async function annotateFusion(
+  params: AnnotateParams,
+  signal?: AbortSignal,
+): Promise<AnnotationResult> {
   const search = toSearchParams(params);
-  const response = await fetch(`${API_BASE_URL}/api/annotate?${search.toString()}`);
+  const response = await fetch(`${API_BASE_URL}/api/annotate?${search.toString()}`, { signal });
   if (!response.ok) {
     let detail = response.statusText;
     try {

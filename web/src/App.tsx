@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import { ExampleFusions } from "./components/ExampleFusions";
 import { FusionForm } from "./components/FusionForm";
@@ -28,11 +28,20 @@ function App() {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const [permalink, setPermalink] = useState(window.location.href);
+  const requestSequence = useRef(0);
+  const activeRequest = useRef<AbortController | null>(null);
 
   const runAnnotation = useCallback(async (params: AnnotateParams, shouldPushState = true) => {
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    const requestId = requestSequence.current + 1;
+    requestSequence.current = requestId;
+
     setFormValues(params);
     setLoading(true);
     setError(null);
+    setResult(null);
 
     if (shouldPushState) {
       // Write inputs to the URL query string *before* the request resolves,
@@ -48,13 +57,20 @@ function App() {
     }
 
     try {
-      const annotation = await annotateFusion(params);
+      const annotation = await annotateFusion(params, controller.signal);
+      if (requestSequence.current !== requestId) return;
       setResult(annotation);
     } catch (err) {
+      if (controller.signal.aborted || requestSequence.current !== requestId) return;
       setResult(null);
       setError(err as ApiError);
     } finally {
-      setLoading(false);
+      if (activeRequest.current === controller) {
+        activeRequest.current = null;
+      }
+      if (requestSequence.current === requestId) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -77,7 +93,10 @@ function App() {
       }
     };
     window.addEventListener("popstate", onPopState);
-    return () => window.removeEventListener("popstate", onPopState);
+    return () => {
+      activeRequest.current?.abort();
+      window.removeEventListener("popstate", onPopState);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
