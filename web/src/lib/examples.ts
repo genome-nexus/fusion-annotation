@@ -25,6 +25,7 @@ export const EXAMPLES: FusionExample[] = [
       three_gene: "ALK",
       five_genomic: "chr2:42295516",
       three_genomic: "chr2:29223528",
+      variant_type: "inversion",
     },
   },
   {
@@ -48,6 +49,7 @@ export const EXAMPLES: FusionExample[] = [
       five_transcript: "ENST00000332149",
       three_transcript: "ENST00000398919",
       genome_build: "GRCh37",
+      variant_type: "deletion",
     },
   },
   {
@@ -61,6 +63,7 @@ export const EXAMPLES: FusionExample[] = [
       five_transcript: "ENST00000397938",
       three_transcript: "ENST00000398919",
       genome_build: "GRCh37",
+      variant_type: "translocation",
     },
   },
   {
@@ -74,6 +77,7 @@ export const EXAMPLES: FusionExample[] = [
       five_transcript: "ENST00000275493",
       three_transcript: "ENST00000275493",
       genome_build: "GRCh37",
+      variant_type: "deletion",
     },
   },
   {
@@ -87,6 +91,7 @@ export const EXAMPLES: FusionExample[] = [
       five_transcript: "ENST00000275493",
       three_transcript: "ENST00000267868",
       genome_build: "GRCh37",
+      variant_type: "translocation",
     },
   },
 ];

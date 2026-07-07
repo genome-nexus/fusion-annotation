@@ -22,20 +22,16 @@ const VARIANT_TYPES = [
  * number or a genomic position per partner (mirrors the annotate_gene_fusion
  * MCP tool / AnnotateRequest schema in api/app.py). */
 export function FusionForm({ initial, derived, onSubmit, loading }: Props) {
-  const initialMode = (initial.input_mode ?? (initial.five_genomic || initial.three_genomic ? "genomic" : "exon")) as "exon" | "genomic";
+  const initialMode = (initial.input_mode ??
+    (initial.five_genomic || initial.three_genomic ? "genomic" : "exon")) as "exon" | "genomic";
   const [mode, setMode] = useState<"exon" | "genomic">(initialMode);
   const [values, setValues] = useState<AnnotateParams>({ ...initial, input_mode: initialMode });
-  const [showAdvanced, setShowAdvanced] = useState(
-    Boolean(initial.five_transcript || initial.three_transcript || initial.species !== "homo_sapiens"),
-  );
 
   useEffect(() => {
-    const newMode = (initial.input_mode ?? (initial.five_genomic || initial.three_genomic ? "genomic" : "exon")) as "exon" | "genomic";
+    const newMode = (initial.input_mode ??
+      (initial.five_genomic || initial.three_genomic ? "genomic" : "exon")) as "exon" | "genomic";
     setMode(newMode);
     setValues({ ...initial, input_mode: newMode });
-    setShowAdvanced(
-      Boolean(initial.five_transcript || initial.three_transcript || initial.species !== "homo_sapiens"),
-    );
   }, [initial]);
 
   function update<K extends keyof AnnotateParams>(key: K, value: AnnotateParams[K]) {
@@ -178,38 +174,24 @@ export function FusionForm({ initial, derived, onSubmit, loading }: Props) {
         </label>
       </div>
 
-      <button
-        type="button"
-        className="advanced-toggle"
-        onClick={() => setShowAdvanced((s) => !s)}
-      >
-        {showAdvanced ? "Hide" : "Show"} advanced options
-      </button>
-
-      {showAdvanced && (
-        <div className="form-row">
-          <label>
-            5′ transcript
-            <input
-              value={values.five_transcript ?? ""}
-              onChange={(e) => update("five_transcript", e.target.value)}
-              placeholder="ENST00000318522 (default: canonical)"
-            />
-          </label>
-          <label>
-            3′ transcript
-            <input
-              value={values.three_transcript ?? ""}
-              onChange={(e) => update("three_transcript", e.target.value)}
-              placeholder="ENST00000389048 (default: canonical)"
-            />
-          </label>
-          <label>
-            Species
-            <input value={values.species} onChange={(e) => update("species", e.target.value)} />
-          </label>
-        </div>
-      )}
+      <div className="form-row">
+        <label>
+          5′ transcript <span className="hint">(optional)</span>
+          <input
+            value={values.five_transcript ?? ""}
+            onChange={(e) => update("five_transcript", e.target.value)}
+            placeholder="ENST00000318522 (default: canonical)"
+          />
+        </label>
+        <label>
+          3′ transcript <span className="hint">(optional)</span>
+          <input
+            value={values.three_transcript ?? ""}
+            onChange={(e) => update("three_transcript", e.target.value)}
+            placeholder="ENST00000389048 (default: canonical)"
+          />
+        </label>
+      </div>
 
       <button type="submit" disabled={loading} className="submit-button">
         {loading ? "Annotating…" : "Annotate fusion"}

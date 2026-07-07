@@ -130,7 +130,6 @@ export interface AnnotateParams {
   five_transcript?: string;
   three_transcript?: string;
   genome_build: string;
-  species: string;
   variant_type?: string;
   input_mode?: "exon" | "genomic";
 }
