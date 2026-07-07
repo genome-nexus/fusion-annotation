@@ -1,6 +1,7 @@
 import { useState } from "react";
-import type { AnnotationResult } from "../lib/types";
+import type { AnnotationResult, FusionKnowledge } from "../lib/types";
 import { computeDerivedInputs, type DerivedInputs, type PartnerDerived } from "../lib/derivedInputs";
+import { civicEvidenceLink } from "../lib/externalLinks";
 import { DomainDiagram } from "./DomainDiagram";
 import { DomainTable } from "./DomainTable";
 import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
@@ -62,6 +63,41 @@ function EquivalentInputs({ derived, result }: { derived: DerivedInputs; result:
         <PartnerBreakpoints label={`5′ ${derived.five.gene}`} p={derived.five} aa={iface.five_last_aa} />
         <PartnerBreakpoints label={`3′ ${derived.three.gene}`} p={derived.three} aa={iface.three_first_aa} />
       </div>
+    </details>
+  );
+}
+
+function ClinicalEvidence({ knowledge }: { knowledge: FusionKnowledge }) {
+  if (!knowledge.evidence || knowledge.evidence.length === 0) return null;
+  return (
+    <details className="clinical-evidence">
+      <summary>
+        CIViC evidence ({knowledge.evidence.length})
+      </summary>
+      <ul className="evidence-list">
+        {knowledge.evidence.map((ev, idx) => {
+          const id = ev.id as number | undefined;
+          const type = ev.type as string | undefined;
+          const level = ev.level as string | undefined;
+          const disease = ev.disease as string | undefined;
+          const therapies = (ev.therapies as string[] | undefined) || [];
+          return (
+            <li key={idx} className="evidence-item">
+              {id ? (
+                <a href={civicEvidenceLink(id).url} target="_blank" rel="noopener noreferrer">
+                  <strong>Evidence #{id}</strong>
+                </a>
+              ) : (
+                <strong>Evidence</strong>
+              )}
+              {type && <span className="evidence-type">{type}</span>}
+              {level && <span className="evidence-level">Level {level}</span>}
+              {disease && <span className="evidence-disease">{disease}</span>}
+              {therapies.length > 0 && <span className="evidence-therapies">{therapies.join(", ")}</span>}
+            </li>
+          );
+        })}
+      </ul>
     </details>
   );
 }
@@ -174,8 +210,33 @@ export function ResultView({ result, permalink }: Props) {
         <dt>Diseases</dt>
         <dd>{knowledge.diseases.length ? knowledge.diseases.join(", ") : "—"}</dd>
         <dt>Sources</dt>
-        <dd>{knowledge.sources.length ? knowledge.sources.join(", ") : "—"}</dd>
+        <dd>
+          {knowledge.sources.length ? (
+            <span>
+              {knowledge.sources.map((source, idx) => {
+                // Parse source strings like "CIViC MP 5" → show as link if it's a CIViC ID
+                const match = source.match(/^CIViC\s+MP\s+(\d+)$/i);
+                if (match) {
+                  const civicId = parseInt(match[1], 10);
+                  return (
+                    <span key={idx}>
+                      {idx > 0 && ", "}
+                      <a href={civicEvidenceLink(civicId).url} target="_blank" rel="noopener noreferrer">
+                        {source}
+                      </a>
+                    </span>
+                  );
+                }
+                return <span key={idx}>{idx > 0 ? ", " : ""}{source}</span>;
+              })}
+            </span>
+          ) : (
+            "—"
+          )}
+        </dd>
       </dl>
+
+      <ClinicalEvidence knowledge={knowledge} />
 
       <p className="disclaimer">
         This is a research/informatics tool, not a diagnostic device. Results should be reviewed by a

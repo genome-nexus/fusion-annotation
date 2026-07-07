@@ -13,6 +13,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import type { DomainCall } from "../lib/types";
+import { pfamLink } from "../lib/externalLinks";
 
 // Columns that should render a <select> filter instead of a text input.
 const SELECT_COLUMNS = new Set(["status", "gene", "type"]);
@@ -25,7 +26,15 @@ const COLUMNS = [
   helper.accessor("name", { header: "Domain", sortingFn: "alphanumeric" }),
   helper.accessor("accession", {
     header: "Accession",
-    cell: (info) => <code>{info.getValue()}</code>,
+    cell: (info) => {
+      const acc = info.getValue();
+      const link = pfamLink(acc);
+      return (
+        <a href={link.url} target="_blank" rel="noopener noreferrer" title={link.title}>
+          <code>{acc}</code>
+        </a>
+      );
+    },
     sortingFn: "alphanumeric",
   }),
   helper.accessor("type", { header: "Type", sortingFn: "alphanumeric" }),
