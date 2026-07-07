@@ -86,6 +86,7 @@ class Transcript:
     cds_g_start: int = 0     # genomic CDS bounds (lo < hi), regardless of strand
     cds_g_end: int = 0
     is_canonical: Optional[bool] = None   # True if this is the gene's canonical/MANE transcript
+    chrom: Optional[str] = None           # UCSC-style chromosome (e.g. "chr7", "chrX")
 
     def cds_len(self) -> int:
         return len(self.cds)
@@ -296,6 +297,7 @@ def _build_transcript_structure(tx: Transcript) -> Optional[dict]:
 
     return {
         "strand": tx.strand,
+        "chrom": tx.chrom,
         "promoter_window_bp": PROMOTER_WINDOW_BP,
         "tss_genomic": tss,
         "transcript_end_genomic": tx_end,

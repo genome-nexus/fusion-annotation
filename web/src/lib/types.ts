@@ -40,6 +40,7 @@ export interface TranscriptStructureExon {
 
 export interface TranscriptStructure {
   strand: 1 | -1;
+  chrom: string | null;
   promoter_window_bp: number;
   tss_genomic: number;
   transcript_end_genomic: number;
@@ -129,7 +130,8 @@ export interface AnnotateParams {
   five_transcript?: string;
   three_transcript?: string;
   genome_build: string;
-  species: string;
+  variant_type?: string;
+  input_mode?: "exon" | "genomic";
 }
 
 export interface ApiError {

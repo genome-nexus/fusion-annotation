@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { AnnotationResult } from "../lib/types";
+import { computeDerivedInputs, type DerivedInputs, type PartnerDerived } from "../lib/derivedInputs";
 import { DomainDiagram } from "./DomainDiagram";
 import { DomainTable } from "./DomainTable";
 import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
@@ -11,10 +12,65 @@ interface Props {
 
 type DiagramView = "domain" | "structure";
 
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className="copy-btn"
+      title="Copy"
+      onClick={() => {
+        navigator.clipboard?.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1200);
+      }}
+    >
+      {copied ? "✓" : "⧉"}
+    </button>
+  );
+}
+
+function PartnerBreakpoints({ label, p, aa }: { label: string; p: PartnerDerived; aa: number }) {
+  const rows: Array<{ name: string; value: string | null }> = [
+    { name: "Genomic", value: p.genomic },
+    { name: "Exon", value: p.exon != null ? `exon ${p.exon}` : null },
+    { name: "CDS", value: `c.${p.cds}` },
+    { name: "Protein", value: `aa ${aa}` },
+  ];
+  return (
+    <div className="equiv-partner">
+      <div className="equiv-partner-label">{label}</div>
+      {rows.map(({ name, value }) =>
+        value ? (
+          <div key={name} className="equiv-row">
+            <span className="equiv-kind">{name}</span>
+            <code className="equiv-val">{value}</code>
+            <CopyButton text={value} />
+          </div>
+        ) : null,
+      )}
+    </div>
+  );
+}
+
+function EquivalentInputs({ derived, result }: { derived: DerivedInputs; result: AnnotationResult }) {
+  const { interface: iface } = result;
+  return (
+    <details className="equiv-inputs">
+      <summary>Equivalent breakpoint representations</summary>
+      <div className="equiv-grid">
+        <PartnerBreakpoints label={`5′ ${derived.five.gene}`} p={derived.five} aa={iface.five_last_aa} />
+        <PartnerBreakpoints label={`3′ ${derived.three.gene}`} p={derived.three} aa={iface.three_first_aa} />
+      </div>
+    </details>
+  );
+}
+
 export function ResultView({ result, permalink }: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
   const [diagramView, setDiagramView] = useState<DiagramView>("domain");
   const hasTranscriptStructure = Boolean(resolved.five.structure || resolved.three.structure);
+  const derived = computeDerivedInputs(result);
 
   return (
     <div className="result-view">
@@ -104,6 +160,8 @@ export function ResultView({ result, permalink }: Props) {
           threePartner={resolved.three}
         />
       )}
+
+      <EquivalentInputs derived={derived} result={result} />
 
       <DomainTable domains={iface.domains} />
 

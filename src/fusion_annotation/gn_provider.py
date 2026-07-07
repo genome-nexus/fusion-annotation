@@ -385,6 +385,7 @@ class GenomeNexusDataProvider:
             cds_g_start=cds_g_start,
             cds_g_end=cds_g_end,
             is_canonical=is_canonical,
+            chrom=self._resolve_chrom(gene_symbol),
         )
 
     def get_domains(self, uniprot: str) -> list[dict]:
