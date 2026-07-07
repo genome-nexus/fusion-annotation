@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { AnnotationResult, FusionKnowledge } from "../lib/types";
 import { computeDerivedInputs, type DerivedInputs, type PartnerDerived } from "../lib/derivedInputs";
-import { civicEvidenceLink } from "../lib/externalLinks";
+import { civicEvidenceLink, civicMolecularProfileLink } from "../lib/externalLinks";
 import { DomainDiagram } from "./DomainDiagram";
 import { DomainTable } from "./DomainTable";
 import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
@@ -214,14 +214,14 @@ export function ResultView({ result, permalink }: Props) {
           {knowledge.sources.length ? (
             <span>
               {knowledge.sources.map((source, idx) => {
-                // Parse source strings like "CIViC MP 5" → show as link if it's a CIViC ID
+                // Parse source strings like "CIViC MP 5" → Molecular Profile link
                 const match = source.match(/^CIViC\s+MP\s+(\d+)$/i);
                 if (match) {
-                  const civicId = parseInt(match[1], 10);
+                  const mpId = parseInt(match[1], 10);
                   return (
                     <span key={idx}>
                       {idx > 0 && ", "}
-                      <a href={civicEvidenceLink(civicId).url} target="_blank" rel="noopener noreferrer">
+                      <a href={civicMolecularProfileLink(mpId).url} target="_blank" rel="noopener noreferrer">
                         {source}
                       </a>
                     </span>

@@ -33,11 +33,19 @@ export function ensemblGeneLink(geneSymbol: string, genomeBuild: string = "GRCh3
   };
 }
 
-/** CIViC evidence ID → CIViC assertion link. */
+/** CIViC evidence ID → CIViC evidence link. */
 export function civicEvidenceLink(evidenceId: number | string): ExternalLink {
   return {
-    url: `https://civicdb.org/evidence/${evidenceId}`,
-    title: `CIViC #${evidenceId}`,
+    url: `https://civicdb.org/evidence/${evidenceId}/summary`,
+    title: `CIViC Evidence #${evidenceId}`,
+  };
+}
+
+/** CIViC molecular profile ID → CIViC molecular profile link. */
+export function civicMolecularProfileLink(mpId: number | string): ExternalLink {
+  return {
+    url: `https://civicdb.org/molecular-profiles/${mpId}/summary`,
+    title: `CIViC Molecular Profile #${mpId}`,
   };
 }
 
