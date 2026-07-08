@@ -140,8 +140,16 @@ def annotate_gene_fusion(
         five_tx=five_transcript, three_tx=three_transcript,
         five_genomic=five_genomic, three_genomic=three_genomic)
 
+    web_link = _build_web_link(
+        five_gene, three_gene, five_exon, three_exon, 
+        five_genomic, three_genomic, five_transcript, three_transcript, 
+        genome_build)
+
     content: list[TextContent | ImageContent] = [
-        TextContent(type="text", text=_json_dumps(result))
+        TextContent(
+            type="text", 
+            text=f"View in web UI: {web_link}\n\n{_json_dumps(result)}"
+        )
     ]
     if include_diagram:
         try:
@@ -165,6 +173,37 @@ def annotate_gene_fusion(
 def _json_dumps(result: dict) -> str:
     import json
     return json.dumps(result, indent=2)
+
+
+def _build_web_link(five_gene: str, three_gene: str,
+                   five_exon: int | None, three_exon: int | None,
+                   five_genomic: int | str | None, three_genomic: int | str | None,
+                   five_transcript: str | None, three_transcript: str | None,
+                   genome_build: str) -> str:
+    """Generate a shareable link to the production web UI with these parameters."""
+    from urllib.parse import urlencode
+    params = {
+        "five_gene": five_gene,
+        "three_gene": three_gene,
+        "genome_build": genome_build,
+    }
+    if five_exon is not None:
+        params["five_exon"] = str(five_exon)
+    if three_exon is not None:
+        params["three_exon"] = str(three_exon)
+    if five_genomic is not None:
+        params["five_genomic"] = str(five_genomic)
+    if three_genomic is not None:
+        params["three_genomic"] = str(three_genomic)
+    if five_transcript is not None:
+        params["five_transcript"] = five_transcript
+    if three_transcript is not None:
+        params["three_transcript"] = three_transcript
+    
+    query_string = urlencode(params)
+    base_url = os.environ.get("FUSION_ANNOTATION_WEB_URL", 
+                              "https://genome-nexus.github.io/fusion-annotation/")
+    return f"{base_url}?{query_string}"
 
 
 async def health(request) -> PlainTextResponse:
