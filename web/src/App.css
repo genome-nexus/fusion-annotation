@@ -60,6 +60,69 @@ header .tagline {
   margin-bottom: 20px;
 }
 
+.batch-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.batch-form-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.batch-form-header h2,
+.batch-form-header p {
+  margin: 0;
+}
+
+.batch-form-header p {
+  margin-top: 4px;
+  color: #495057;
+}
+
+.batch-format {
+  border: 1px solid #d0ebff;
+  border-radius: 999px;
+  background: #e7f5ff;
+  color: #1864ab;
+  padding: 4px 10px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.batch-form textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #ced4da;
+  border-radius: 4px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9rem;
+  resize: vertical;
+}
+
+.batch-results {
+  margin-top: 24px;
+}
+
+.batch-result-item {
+  border-top: 2px solid #dee2e6;
+  padding-top: 20px;
+  margin-top: 20px;
+}
+
+.batch-result-item > h3 {
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
 /* Input-mode tab strip */
 .input-mode-tabs {
   display: flex;
