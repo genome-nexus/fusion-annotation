@@ -83,6 +83,23 @@ def test_annotate_post_matches_get(client):
     assert r.json()["interface"]["categorical_key"] == "EML4::ALK"
 
 
+def test_annotate_batch_returns_per_fusion_results(client):
+    r = client.post("/api/annotate/batch", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+            {"five_gene": "NOPE_NOT_A_GENE", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+        ]
+    })
+
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["results"]) == 2
+    assert body["results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
+    assert body["results"][0]["error"] is None
+    assert body["results"][1]["result"] is None
+    assert "NOPE_NOT_A_GENE" in body["results"][1]["error"]
+
+
 def test_annotate_missing_required_field(client):
     r = client.get("/api/annotate", params={"five_gene": "EML4"})
     assert r.status_code == 422  # FastAPI request validation, not our handler
