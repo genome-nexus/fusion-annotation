@@ -1,4 +1,4 @@
-import type { AnnotateParams, AnnotationResult, ApiError } from "./types";
+import type { AnnotateParams, AnnotationResult, ApiError, BatchAnnotationResponse } from "./types";
 
 // Base URL of the deployed REST API (api/app.py). In dev, Vite's proxy
 // (vite.config.ts) forwards /api to a locally-running API, so this can stay
@@ -43,6 +43,30 @@ export async function annotateFusion(
 ): Promise<AnnotationResult> {
   const search = toSearchParams(params);
   const response = await fetch(`${API_BASE_URL}/api/annotate?${search.toString()}`, { signal });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = formatDetail(body?.detail, detail);
+    } catch {
+      // response body wasn't JSON — fall back to statusText
+    }
+    const error: ApiError = { status: response.status, detail };
+    throw error;
+  }
+  return response.json();
+}
+
+export async function annotateFusionBatch(
+  fusions: AnnotateParams[],
+  signal?: AbortSignal,
+): Promise<BatchAnnotationResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/annotate/batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fusions }),
+    signal,
+  });
   if (!response.ok) {
     let detail = response.statusText;
     try {
