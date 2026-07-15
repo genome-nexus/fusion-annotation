@@ -128,6 +128,25 @@ export interface BatchAnnotationResponse {
   results: BatchAnnotationItemResult[];
 }
 
+export interface GeneCurationStatus {
+  enabled: boolean;
+  model: string;
+}
+
+export interface GeneCurationGeneResult {
+  gene: string;
+  cancer_associated?: boolean | null;
+  rationale?: string;
+  supporting_pmids?: string[];
+  retrieved_pmids?: string[];
+  insufficient_evidence?: boolean;
+  error?: string;
+}
+
+export interface GeneCurationResponse {
+  genes: GeneCurationGeneResult[];
+}
+
 // The inputs a caller supplies — mirrors AnnotateRequest in api/app.py, and is
 // exactly what gets encoded into the permalink's URL query string.
 export interface AnnotateParams {

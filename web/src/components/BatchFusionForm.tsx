@@ -4,7 +4,10 @@ import type { AnnotateParams } from "../lib/types";
 interface Props {
   genomeBuild: string;
   onSubmit: (params: AnnotateParams[]) => void;
+  onCurate?: (params: AnnotateParams[]) => void;
   loading: boolean;
+  curationLoading?: boolean;
+  curationEnabled?: boolean;
 }
 
 function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | null {
@@ -34,22 +37,42 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
   };
 }
 
-export function BatchFusionForm({ genomeBuild, onSubmit, loading }: Props) {
+export function BatchFusionForm({
+  genomeBuild,
+  onSubmit,
+  onCurate,
+  loading,
+  curationLoading = false,
+  curationEnabled = false,
+}: Props) {
   const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2");
   const [parseError, setParseError] = useState<string | null>(null);
+
+  function parseInput(): AnnotateParams[] {
+    const parsed = text
+      .split(/\r?\n/)
+      .map((line) => parseBatchLine(line, genomeBuild))
+      .filter((item): item is AnnotateParams => item !== null);
+    if (!parsed.length) {
+      throw new Error("Add at least one fusion line before running a batch.");
+    }
+    setParseError(null);
+    return parsed;
+  }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
-      const parsed = text
-        .split(/\r?\n/)
-        .map((line) => parseBatchLine(line, genomeBuild))
-        .filter((item): item is AnnotateParams => item !== null);
-      if (!parsed.length) {
-        throw new Error("Add at least one fusion line before running a batch.");
-      }
-      setParseError(null);
-      onSubmit(parsed);
+      onSubmit(parseInput());
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleCurate() {
+    if (!onCurate) return;
+    try {
+      onCurate(parseInput());
     } catch (error) {
       setParseError(error instanceof Error ? error.message : String(error));
     }
@@ -72,9 +95,21 @@ export function BatchFusionForm({ genomeBuild, onSubmit, loading }: Props) {
         aria-label="Batch fusion input"
       />
       {parseError && <div className="error-box">{parseError}</div>}
-      <button type="submit" disabled={loading} className="submit-button">
-        {loading ? "Annotating batch..." : "Annotate batch"}
-      </button>
+      <div className="batch-actions">
+        <button type="submit" disabled={loading || curationLoading} className="submit-button">
+          {loading ? "Annotating batch..." : "Annotate batch"}
+        </button>
+        {onCurate && (
+          <button
+            type="button"
+            disabled={!curationEnabled || loading || curationLoading}
+            className="secondary-button"
+            onClick={handleCurate}
+          >
+            {curationLoading ? "Curating genes..." : "Curate genes"}
+          </button>
+        )}
+      </div>
     </form>
   );
 }

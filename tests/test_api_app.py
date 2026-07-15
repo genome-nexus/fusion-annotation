@@ -108,7 +108,6 @@ def test_annotate_batch_returns_per_fusion_results(client):
     assert body["results"][2]["result"] is None
     assert "NOPE_NOT_A_GENE" in body["results"][2]["error"]
 
-
 def test_annotate_batch_reuses_provider_by_species_and_build(monkeypatch):
     calls = []
 
@@ -209,6 +208,46 @@ def test_annotate_batch_runs_rows_in_parallel(monkeypatch):
         "CD74::ROS1",
     ]
     assert elapsed < 0.3
+
+
+def test_gene_curation_status_reports_disabled_without_key(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    r = client.get("/api/gene-curation/status")
+
+    assert r.status_code == 200
+    assert r.json()["enabled"] is False
+
+
+def test_gene_curation_uses_server_side_service(client, monkeypatch):
+    seen = {}
+
+    def fake_curate_fusion_genes(fusions):
+        seen["fusions"] = fusions
+        return {
+            "genes": [
+                {
+                    "gene": "ALK",
+                    "cancer_associated": True,
+                    "rationale": "ALK fusions are oncogenic.",
+                    "supporting_pmids": ["1"],
+                    "retrieved_pmids": ["1", "2"],
+                    "insufficient_evidence": False,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(api_app, "curate_fusion_genes", fake_curate_fusion_genes)
+
+    r = client.post("/api/gene-curation", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20}
+        ]
+    })
+
+    assert r.status_code == 200
+    assert seen["fusions"][0].five_gene == "EML4"
+    assert r.json()["genes"][0]["gene"] == "ALK"
 
 
 def test_annotate_missing_required_field(client):

@@ -36,6 +36,10 @@ from slowapi.util import get_remote_address
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fusion_annotation.core import annotate_fusion  # noqa: E402
+from fusion_annotation.gene_curation import (  # noqa: E402
+    GeneCurationUnavailable,
+    curate_fusion_genes,
+)
 from fusion_annotation.provider_factory import make_provider  # noqa: E402
 
 
@@ -123,6 +127,10 @@ class BatchAnnotateItemResult(BaseModel):
 
 class BatchAnnotateResponse(BaseModel):
     results: list[BatchAnnotateItemResult]
+
+
+class GeneCurationResponse(BaseModel):
+    genes: list[dict]
 
 
 def _batch_worker_count(item_count: int) -> int:
@@ -263,6 +271,24 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
     failing the whole batch.
     """
     return BatchAnnotateResponse(results=_annotate_batch_items(params.fusions))
+
+
+@app.get("/api/gene-curation/status")
+def gene_curation_status() -> dict:
+    return {
+        "enabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "model": os.environ.get("FUSION_GENE_CURATION_MODEL", "claude-3-5-haiku-latest"),
+    }
+
+
+@app.post("/api/gene-curation", response_model=GeneCurationResponse)
+@limiter.limit(RATE_LIMIT)
+def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # noqa: ARG001
+    """Run server-side literature curation for all unique genes in a batch."""
+    try:
+        return curate_fusion_genes(params.fusions)
+    except GeneCurationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 if __name__ == "__main__":

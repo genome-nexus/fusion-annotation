@@ -109,6 +109,12 @@ header .tagline {
   resize: vertical;
 }
 
+.batch-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .batch-results {
   margin-top: 24px;
 }
@@ -209,6 +215,22 @@ header .tagline {
   cursor: default;
 }
 
+.secondary-button {
+  align-self: flex-start;
+  padding: 8px 20px;
+  background: #fff;
+  color: #1971c2;
+  border: 1px solid #74c0fc;
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.secondary-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .error-box {
   background: #fff5f5;
   border: 1px solid #ffa8a8;
@@ -216,6 +238,86 @@ header .tagline {
   padding: 10px 14px;
   border-radius: 6px;
   margin-bottom: 20px;
+}
+
+.notice-box {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  color: #495057;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.gene-curation-results {
+  margin-top: 24px;
+}
+
+.gene-curation-note {
+  color: #495057;
+}
+
+.gene-curation-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.gene-curation-card {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.gene-curation-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gene-curation-card-header h3 {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.status-chip {
+  border-radius: 999px;
+  background: #d3f9d8;
+  color: #2b8a3e;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.status-chip.muted {
+  background: #f1f3f5;
+  color: #868e96;
+}
+
+.gene-curation-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+}
+
+.gene-curation-fields dt,
+.pmid-row strong {
+  color: #495057;
+  font-weight: 600;
+}
+
+.gene-curation-fields dd {
+  margin: 0;
+}
+
+.pmid-row {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin-top: 8px;
+  word-break: break-word;
 }
 
 .permalink-row {
