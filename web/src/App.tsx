@@ -37,6 +37,68 @@ function paramsFromLocation(): AnnotateParams {
   return params;
 }
 
+function curationPriority(item: GeneCurationGeneResult) {
+  if (item.insufficient_evidence) {
+    return {
+      label: "Low priority",
+      tone: "muted",
+      title: "PubMed evidence was too sparse for a confident curation result.",
+    };
+  }
+  if (item.cancer_associated === true) {
+    return {
+      label: "Review priority",
+      tone: "attention",
+      title: "Cancer-associated literature evidence was found; review before follow-up.",
+    };
+  }
+  if (item.cancer_associated === false) {
+    return {
+      label: "Low priority",
+      tone: "muted",
+      title: "Current PubMed evidence does not support a cancer association.",
+    };
+  }
+  return {
+    label: "Needs review",
+    tone: "neutral",
+    title: "The curation result is uncertain and should be reviewed.",
+  };
+}
+
+function curationEvidenceSignal(item: GeneCurationGeneResult) {
+  if (item.insufficient_evidence) {
+    return {
+      label: "Sparse evidence",
+      tone: "muted",
+      title: "The curation model marked the retrieved literature as insufficient.",
+    };
+  }
+  if (item.cancer_associated === true) {
+    return {
+      label: "Functional cancer evidence",
+      tone: "evidence",
+      title: "Cancer-associated evidence is shown without changing backend schema or tier logic.",
+    };
+  }
+  if (item.cancer_associated === false) {
+    return {
+      label: "No cancer evidence",
+      tone: "muted",
+      title: "The curation result did not find supporting cancer evidence.",
+    };
+  }
+  return {
+    label: "Uncertain evidence",
+    tone: "neutral",
+    title: "The curation result did not make a binary cancer association call.",
+  };
+}
+
+function curationBadges(item: GeneCurationGeneResult) {
+  return [curationPriority(item), curationEvidenceSignal(item)];
+}
+
 function App() {
   const [formValues, setFormValues] = useState<AnnotateParams>(paramsFromLocation);
   const [result, setResult] = useState<AnnotationResult | null>(null);
@@ -277,9 +339,17 @@ function App() {
               <article className="gene-curation-card" key={item.gene}>
                 <div className="gene-curation-card-header">
                   <h3>{item.gene}</h3>
-                  <span className={item.insufficient_evidence ? "status-chip muted" : "status-chip"}>
-                    {item.insufficient_evidence ? "Sparse evidence" : "Curated"}
-                  </span>
+                  <div className="curation-badges" aria-label={`${item.gene} review signals`}>
+                    {curationBadges(item).map((badge) => (
+                      <span
+                        className={`status-chip ${badge.tone}`}
+                        key={badge.label}
+                        title={badge.title}
+                      >
+                        {badge.label}
+                      </span>
+                    ))}
+                  </div>
                 </div>
                 {item.error ? (
                   <div className="error-box">{item.error}</div>

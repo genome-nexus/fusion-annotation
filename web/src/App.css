@@ -271,7 +271,7 @@ header .tagline {
 
 .gene-curation-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
 }
@@ -279,6 +279,13 @@ header .tagline {
 .gene-curation-card-header h3 {
   margin: 0;
   font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.curation-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
 .status-chip {
@@ -289,6 +296,21 @@ header .tagline {
   font-weight: 600;
   padding: 3px 8px;
   white-space: nowrap;
+}
+
+.status-chip.attention {
+  background: #fff3bf;
+  color: #8d6500;
+}
+
+.status-chip.evidence {
+  background: #e6fcf5;
+  color: #087f5b;
+}
+
+.status-chip.neutral {
+  background: #e7f5ff;
+  color: #1864ab;
 }
 
 .status-chip.muted {

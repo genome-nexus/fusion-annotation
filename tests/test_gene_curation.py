@@ -75,6 +75,58 @@ def test_curate_gene_reuses_persistent_cache(tmp_path, monkeypatch):
     assert calls == 1
 
 
+def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+    seen = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            seen["system"] = kwargs["system"]
+            seen["prompt"] = kwargs["messages"][0]["content"]
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"ALK has concise functional cancer evidence.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+
+    assert "1-2 short sentences" in seen["prompt"]
+    assert "40-75 words" in seen["prompt"]
+    assert "Do not enumerate every paper" in seen["prompt"]
+    assert "fast curator review" in seen["system"]
+
+
 def test_curate_fusion_genes_passes_token_controls(monkeypatch):
     class Fusion:
         five_gene = "EML4"

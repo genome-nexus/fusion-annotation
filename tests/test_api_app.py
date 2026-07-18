@@ -250,6 +250,17 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
+def test_gene_curation_ui_uses_reviewer_facing_badges():
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    app_tsx = open(os.path.join(root, "web", "src", "App.tsx")).read()
+    styles = open(os.path.join(root, "web", "src", "App.css")).read()
+
+    assert "Functional cancer evidence" in app_tsx
+    assert "Review priority" in app_tsx
+    assert "without changing backend schema or tier logic" in app_tsx
+    assert ".curation-badges" in styles
+
+
 def test_annotate_missing_required_field(client):
     r = client.get("/api/annotate", params={"five_gene": "EML4"})
     assert r.status_code == 422  # FastAPI request validation, not our handler

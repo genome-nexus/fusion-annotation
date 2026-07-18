@@ -239,7 +239,10 @@ PubMed context:
 Return one JSON object with:
 - gene
 - cancer_associated: true/false/null
-- rationale: concise curator-facing explanation grounded only in the PubMed context
+- rationale: concise curator-facing scan text grounded only in the PubMed context.
+  Write 1-2 short sentences, ideally 40-75 words total. Prioritize the
+  classification-relevant conclusion, strongest mechanism/cancer context, and
+  one caveat if needed. Do not enumerate every paper or make a literature-review paragraph.
 - supporting_pmids: up to 4 PMIDs from the context
 - retrieved_pmids: all PMIDs provided in the context
 - insufficient_evidence: true when the context is too sparse
@@ -253,7 +256,8 @@ Return one JSON object with:
         max_tokens=1024,
         system=(
             "You are a cancer genomics literature curator. "
-            "Use only the provided PubMed context. Return valid JSON only."
+            "Use only the provided PubMed context. Return valid JSON only. "
+            "Keep rationale text concise and optimized for fast curator review."
         ),
         messages=[{"role": "user", "content": prompt}],
     )
