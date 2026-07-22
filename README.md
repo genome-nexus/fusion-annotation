@@ -393,11 +393,12 @@ components sit on top of the same core engine:
   rate limiting (`FUSION_ANNOTATION_RATE_LIMIT`, default `30/minute`) and a
   configurable CORS allowlist (`FUSION_ANNOTATION_CORS_ORIGINS`, default `*`).
 - **`web/`** — a React + TypeScript SPA (Vite) that calls `api/` for a
-  lookup form, an HGVS.p-like result summary, a domain-retention table, and
-  an interactive SVG domain diagram (the in-browser version of the figure at
-  the top of this README). The current lookup is always reflected in the URL
-  query string, so the address bar doubles as the permalink. Deployed as a
-  static site on **GitHub Pages** — no server, no container, $0 hosting cost.
+  single-fusion lookup tab, a separate batch annotation tab, an HGVS.p-like
+  result summary, a domain-retention table, and an interactive SVG domain
+  diagram (the in-browser version of the figure at the top of this README).
+  The current single-fusion lookup is always reflected in the URL query
+  string, so the address bar doubles as the permalink. Deployed as a static
+  site on **GitHub Pages** — no server, no container, $0 hosting cost.
 
 The server-side curation endpoint accepts the same batch fusion rows as
 annotation, but it
@@ -413,6 +414,14 @@ batch input supports both forms:
 EML4::ALK,13,20
 CD74::ROS1
 ```
+
+In the web UI, AGCG-style curation appears as an expandable **Gene information**
+section at the bottom of each fusion annotation result rather than as a separate
+top-level results block. Each involved gene can be expanded to review the
+literature-backed driver signal, confidence label, rationale, supporting PMIDs,
+retrieved PMIDs, and any Genome Nexus fusion-position context used by the
+curation run. Batch results are reviewed from a selectable list; choosing a
+completed row opens the same result view used by the single-fusion workflow.
 
 Run both locally:
 

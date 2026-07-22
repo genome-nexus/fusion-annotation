@@ -290,20 +290,25 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
 def test_gene_curation_ui_uses_reviewer_facing_badges():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     app_tsx = open(os.path.join(root, "web", "src", "App.tsx")).read()
+    result_view_tsx = open(os.path.join(root, "web", "src", "components", "ResultView.tsx")).read()
     styles = open(os.path.join(root, "web", "src", "App.css")).read()
 
-    assert "Functional cancer evidence" in app_tsx
-    assert "Review priority" in app_tsx
-    assert "without changing backend schema or tier logic" in app_tsx
-    assert "Server-side curation uses Genome Nexus fusion structure" in app_tsx
-    assert "breakpoint context unavailable" in app_tsx
+    assert "Batch annotation" in app_tsx
+    assert "batch-review-layout" in app_tsx
+    assert "Gene information" in result_view_tsx
+    assert "Functional cancer evidence" in result_view_tsx
+    assert "Review priority" in result_view_tsx
+    assert "without changing backend schema or tier logic" in result_view_tsx
+    assert "breakpoint context unavailable" in result_view_tsx
     assert "fusion_specificity" in app_tsx
-    assert "fusion-curation-context" in app_tsx
-    assert "Export curation CSV" in app_tsx
+    assert "fusion-curation-context" in result_view_tsx
+    assert "Export gene CSV" in result_view_tsx
     assert "fusion_gene_curation.csv" in app_tsx
+    assert ".workflow-tabs" in styles
+    assert ".batch-review-layout" in styles
+    assert ".gene-info-section" in styles
     assert ".curation-badges" in styles
     assert ".fusion-curation-contexts" in styles
-    assert ".gene-curation-results-header" in styles
 
 
 def test_annotate_missing_required_field(client):

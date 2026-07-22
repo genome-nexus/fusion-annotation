@@ -49,6 +49,29 @@ header .tagline {
   cursor: default;
 }
 
+.workflow-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #dee2e6;
+  margin-bottom: 18px;
+}
+
+.workflow-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #495057;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 10px 16px 9px;
+}
+
+.workflow-tab.active {
+  border-bottom-color: #1971c2;
+  color: #1864ab;
+}
+
 .fusion-form {
   display: flex;
   flex-direction: column;
@@ -119,14 +142,68 @@ header .tagline {
   margin-top: 24px;
 }
 
-.batch-result-item {
-  border-top: 2px solid #dee2e6;
-  padding-top: 20px;
-  margin-top: 20px;
+.batch-results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
-.batch-result-item > h3 {
+.batch-results-header h2,
+.batch-results-header p {
+  margin: 0;
+}
+
+.batch-results-header p {
+  margin-top: 4px;
+  color: #495057;
+}
+
+.batch-review-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.batch-run-list {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  top: 12px;
+}
+
+.batch-run-item {
+  appearance: none;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #fff;
+  color: #212529;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.batch-run-item.active {
+  border-color: #74c0fc;
+  background: #e7f5ff;
+}
+
+.batch-run-item span {
   font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.batch-run-item small {
+  color: #5c6770;
+}
+
+.batch-review-pane {
+  min-width: 0;
 }
 
 /* Input-mode tab strip */
@@ -365,6 +442,85 @@ header .tagline {
 
 .fusion-curation-limitations li + li {
   margin-top: 4px;
+}
+
+.gene-info-section {
+  border-top: 2px solid #dee2e6;
+  margin-top: 28px;
+  padding-top: 20px;
+}
+
+.gene-info-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.gene-info-header h3,
+.gene-info-header p {
+  margin: 0;
+}
+
+.gene-info-header p {
+  margin-top: 4px;
+  color: #495057;
+}
+
+.gene-info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gene-info-list {
+  display: grid;
+  gap: 10px;
+}
+
+.gene-info-item {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.gene-info-item summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.gene-info-symbol {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 800;
+}
+
+.gene-info-summary {
+  color: #495057;
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.gene-info-body {
+  border-top: 1px solid #edf2f7;
+  padding: 12px 14px 14px;
+}
+
+.gene-info-body .curation-badges {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.gene-info-empty {
+  border-top: 1px solid #edf2f7;
+  color: #495057;
+  margin: 0;
+  padding: 12px 14px 14px;
 }
 
 .status-chip {
@@ -877,4 +1033,37 @@ a code {
 .version-footnote a {
   color: inherit;
   font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+@media (max-width: 760px) {
+  .batch-form-header,
+  .batch-results-header,
+  .gene-info-header {
+    display: grid;
+  }
+
+  .batch-format {
+    white-space: normal;
+  }
+
+  .batch-review-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-run-list {
+    position: static;
+  }
+
+  .gene-info-actions {
+    justify-content: flex-start;
+  }
+
+  .gene-info-item summary {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .gene-info-summary {
+    text-align: left;
+  }
 }

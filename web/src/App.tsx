@@ -19,7 +19,6 @@ import type {
   AnnotationResult,
   ApiError,
   BatchAnnotationItemResult,
-  GeneFusionCurationContext,
   GeneCurationGeneResult,
   GeneCurationStatus,
 } from "./lib/types";
@@ -36,139 +35,6 @@ function paramsFromLocation(): AnnotateParams {
     if (value !== null) (params as Record<string, unknown>)[key] = value;
   }
   return params;
-}
-
-function curationPriority(item: GeneCurationGeneResult) {
-  if (item.insufficient_evidence) {
-    return {
-      label: "Low priority",
-      tone: "muted",
-      title: "PubMed evidence was too sparse for a confident curation result.",
-    };
-  }
-  if (item.cancer_associated === true) {
-    return {
-      label: "Review priority",
-      tone: "attention",
-      title: "Cancer-associated literature evidence was found; review before follow-up.",
-    };
-  }
-  if (item.cancer_associated === false) {
-    return {
-      label: "Low priority",
-      tone: "muted",
-      title: "Current PubMed evidence does not support a cancer association.",
-    };
-  }
-  return {
-    label: "Needs review",
-    tone: "neutral",
-    title: "The curation result is uncertain and should be reviewed.",
-  };
-}
-
-function curationEvidenceSignal(item: GeneCurationGeneResult) {
-  if (item.insufficient_evidence) {
-    return {
-      label: "Sparse evidence",
-      tone: "muted",
-      title: "The curation model marked the retrieved literature as insufficient.",
-    };
-  }
-  if (item.cancer_associated === true) {
-    return {
-      label: "Functional cancer evidence",
-      tone: "evidence",
-      title: "Cancer-associated evidence is shown without changing backend schema or tier logic.",
-    };
-  }
-  if (item.cancer_associated === false) {
-    return {
-      label: "No cancer evidence",
-      tone: "muted",
-      title: "The curation result did not find supporting cancer evidence.",
-    };
-  }
-  return {
-    label: "Uncertain evidence",
-    tone: "neutral",
-    title: "The curation result did not make a binary cancer association call.",
-  };
-}
-
-function curationBadges(item: GeneCurationGeneResult) {
-  return [curationPriority(item), curationEvidenceSignal(item)];
-}
-
-function formatContextSide(context: GeneFusionCurationContext) {
-  return context.side === "five_prime" ? "5' partner" : "3' partner";
-}
-
-function formatDomainList(domains?: string[]) {
-  return domains && domains.length ? domains.join(", ") : "none";
-}
-
-function formatFusionSpecificity(value?: GeneFusionCurationContext["fusion_specificity"]) {
-  if (value === "protein_domain_level") return "Protein/domain-level";
-  if (value === "exon_level") return "Exon-level";
-  return "Gene-pair only";
-}
-
-function renderFusionContext(context: GeneFusionCurationContext) {
-  const breakpoint = context.side === "five_prime"
-    ? {
-        transcript: context.five_transcript,
-        exon: context.five_exon,
-        genomic: context.five_genomic,
-        protein: context.five_protein_breakpoint,
-      }
-    : {
-        transcript: context.three_transcript,
-        exon: context.three_exon,
-        genomic: context.three_genomic,
-        protein: context.three_protein_breakpoint,
-      };
-  return (
-    <div className="fusion-curation-context" key={`${context.gene}-${context.fusion}-${context.side}`}>
-      <div className="fusion-curation-context-title">
-        <strong>{context.fusion}</strong>
-        <span>{formatContextSide(context)}</span>
-      </div>
-      <dl>
-        <dt>Scope</dt>
-        <dd>
-          {formatFusionSpecificity(context.fusion_specificity)}
-          {context.breakpoint_context_available ? "" : " · breakpoint context unavailable"}
-        </dd>
-        <dt>Partner</dt>
-        <dd>{context.partner_gene}</dd>
-        <dt>Breakpoint</dt>
-        <dd>
-          tx {breakpoint.transcript || "unknown"} · exon {breakpoint.exon || "unknown"} · genomic{" "}
-          {breakpoint.genomic || "unknown"} · protein {breakpoint.protein || "unknown"}
-        </dd>
-        <dt>Domains</dt>
-        <dd>
-          retained: {formatDomainList(context.retained_domains)} · lost/disrupted:{" "}
-          {formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}
-        </dd>
-        <dt>Kinase</dt>
-        <dd>
-          {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
-        </dd>
-      </dl>
-      {context.limitations && context.limitations.length > 0 && (
-        <ul className="fusion-curation-limitations">
-          {context.limitations.map((limitation) => (
-            <li key={limitation}>{limitation}</li>
-          ))}
-        </ul>
-      )}
-      {context.annotation_error && (
-        <p className="fusion-curation-context-error">{context.annotation_error}</p>
-      )}
-    </div>
-  );
 }
 
 const CURATION_CSV_HEADERS = [
@@ -260,10 +126,14 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+type AppTab = "single" | "batch";
+
 function App() {
+  const [activeTab, setActiveTab] = useState<AppTab>("single");
   const [formValues, setFormValues] = useState<AnnotateParams>(paramsFromLocation);
   const [result, setResult] = useState<AnnotationResult | null>(null);
   const [batchResults, setBatchResults] = useState<BatchAnnotationItemResult[] | null>(null);
+  const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
   const [geneCurationStatus, setGeneCurationStatus] = useState<GeneCurationStatus | null>(null);
   const [geneCurationResults, setGeneCurationResults] = useState<GeneCurationGeneResult[] | null>(null);
   const [derived, setDerived] = useState<DerivedInputs | null>(null);
@@ -293,6 +163,7 @@ function App() {
     setError(null);
     setResult(null);
     setBatchResults(null);
+    setSelectedBatchIndex(0);
     setBatchLoading(false);
     setGeneCurationResults(null);
     setCurationError(null);
@@ -347,6 +218,7 @@ function App() {
     setResult(null);
     setDerived(null);
     setBatchResults(null);
+    setSelectedBatchIndex(0);
     setGeneCurationResults(null);
     setCurationError(null);
     setCurationLoading(false);
@@ -355,6 +227,7 @@ function App() {
       const response = await annotateFusionBatch(fusions, controller.signal);
       if (requestSequence.current !== requestId) return;
       setBatchResults(response.results);
+      setSelectedBatchIndex(Math.max(0, response.results.findIndex((item) => item.result)));
     } catch (err) {
       if (controller.signal.aborted || requestSequence.current !== requestId) return;
       setError(err as ApiError);
@@ -405,6 +278,9 @@ function App() {
     );
   }, [geneCurationResults]);
 
+  const selectedBatchItem = batchResults?.[selectedBatchIndex] ?? null;
+  const batchInputs = batchResults?.map((item) => item.input) ?? [];
+
   // On load (including a permalink being opened fresh), auto-run the
   // annotation if the URL already carries both gene names.
   useEffect(() => {
@@ -452,23 +328,42 @@ function App() {
         </p>
       </header>
 
-      <ExampleFusions onSelect={runAnnotation} disabled={loading} />
+      <nav className="workflow-tabs" aria-label="Annotation workflow">
+        <button
+          type="button"
+          className={activeTab === "single" ? "workflow-tab active" : "workflow-tab"}
+          aria-pressed={activeTab === "single"}
+          onClick={() => setActiveTab("single")}
+        >
+          Single fusion
+        </button>
+        <button
+          type="button"
+          className={activeTab === "batch" ? "workflow-tab active" : "workflow-tab"}
+          aria-pressed={activeTab === "batch"}
+          onClick={() => setActiveTab("batch")}
+        >
+          Batch annotation
+        </button>
+      </nav>
 
-      <FusionForm initial={formValues} derived={derived} onSubmit={runAnnotation} loading={loading} />
+      {activeTab === "single" && (
+        <>
+          <ExampleFusions onSelect={runAnnotation} disabled={loading} />
 
-      <BatchFusionForm
-        genomeBuild={formValues.genome_build}
-        onSubmit={runBatchAnnotation}
-        loading={batchLoading}
-        onCurate={runGeneCuration}
-        curationLoading={curationLoading}
-        curationEnabled={geneCurationStatus?.enabled ?? false}
-      />
+          <FusionForm initial={formValues} derived={derived} onSubmit={runAnnotation} loading={loading} />
+        </>
+      )}
 
-      {geneCurationStatus && !geneCurationStatus.enabled && (
-        <div className="notice-box">
-          Server-side gene curation is not configured for this deployment.
-        </div>
+      {activeTab === "batch" && (
+        <BatchFusionForm
+          genomeBuild={formValues.genome_build}
+          onSubmit={runBatchAnnotation}
+          loading={batchLoading}
+          onCurate={runGeneCuration}
+          curationLoading={curationLoading}
+          curationEnabled={geneCurationStatus?.enabled ?? false}
+        />
       )}
 
       {error && (
@@ -483,86 +378,68 @@ function App() {
         </div>
       )}
 
-      {result && <ResultView result={result} permalink={permalink} />}
-
-      {batchResults && (
-        <section className="batch-results">
-          <h2>Batch results</h2>
-          {batchResults.map((item, index) => {
-            const label = `${item.input.five_gene}::${item.input.three_gene}`;
-            return (
-              <article className="batch-result-item" key={`${label}-${index}`}>
-                <h3>{label}</h3>
-                {item.error && <div className="error-box">{item.error}</div>}
-                {item.result && (
-                  <ResultView
-                    result={item.result}
-                    permalink={`${window.location.origin}${window.location.pathname}?${toSearchParams(item.input).toString()}`}
-                  />
-                )}
-              </article>
-            );
-          })}
-        </section>
+      {activeTab === "single" && result && (
+        <ResultView
+          result={result}
+          permalink={permalink}
+          geneCurationResults={geneCurationResults}
+          geneCurationLoading={curationLoading}
+          geneCurationEnabled={geneCurationStatus?.enabled ?? true}
+          geneCurationError={curationError}
+          onCurateGenes={() => runGeneCuration([formValues])}
+          onExportGeneCurationCsv={exportGeneCurationCsv}
+        />
       )}
 
-      {geneCurationResults && (
-        <section className="gene-curation-results">
-          <div className="gene-curation-results-header">
+      {activeTab === "batch" && batchResults && (
+        <section className="batch-results">
+          <div className="batch-results-header">
             <div>
-              <h2>Gene literature curation</h2>
-              <p className="gene-curation-note">
-                Server-side curation uses Genome Nexus fusion structure and PubMed abstracts for the batch.
-              </p>
+              <h2>Batch results</h2>
+              <p>Select a completed run to inspect it with the same annotation view used for a single fusion.</p>
             </div>
-            <button type="button" className="secondary-button" onClick={exportGeneCurationCsv}>
-              Export curation CSV
-            </button>
+            {geneCurationResults?.length ? (
+              <button type="button" className="secondary-button" onClick={exportGeneCurationCsv}>
+                Export gene CSV
+              </button>
+            ) : null}
           </div>
-          <div className="gene-curation-grid">
-            {geneCurationResults.map((item) => (
-              <article className="gene-curation-card" key={item.gene}>
-                <div className="gene-curation-card-header">
-                  <h3>{item.gene}</h3>
-                  <div className="curation-badges" aria-label={`${item.gene} review signals`}>
-                    {curationBadges(item).map((badge) => (
-                      <span
-                        className={`status-chip ${badge.tone}`}
-                        key={badge.label}
-                        title={badge.title}
-                      >
-                        {badge.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                {item.error ? (
-                  <div className="error-box">{item.error}</div>
-                ) : (
-                  <>
-                    {item.fusion_contexts && item.fusion_contexts.length > 0 && (
-                      <div className="fusion-curation-contexts">
-                        {item.fusion_contexts.map(renderFusionContext)}
-                      </div>
-                    )}
-                    <dl className="gene-curation-fields">
-                      <dt>Cancer associated</dt>
-                      <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
-                      <dt>Rationale</dt>
-                      <dd>{item.rationale || "No rationale returned."}</dd>
-                    </dl>
-                    <div className="pmid-row">
-                      <strong>Supporting PMIDs</strong>
-                      <span>{item.supporting_pmids?.join(", ") || "None selected"}</span>
-                    </div>
-                    <div className="pmid-row">
-                      <strong>Retrieved PMIDs</strong>
-                      <span>{item.retrieved_pmids?.join(", ") || "None retrieved"}</span>
-                    </div>
-                  </>
-                )}
-              </article>
-            ))}
+          <div className="batch-review-layout">
+            <div className="batch-run-list" role="list" aria-label="Completed batch runs">
+              {batchResults.map((item, index) => {
+                const label = `${item.input.five_gene}::${item.input.three_gene}`;
+                return (
+                  <button
+                    type="button"
+                    role="listitem"
+                    className={index === selectedBatchIndex ? "batch-run-item active" : "batch-run-item"}
+                    key={`${label}-${index}`}
+                    onClick={() => setSelectedBatchIndex(index)}
+                  >
+                    <span>{label}</span>
+                    <small>{item.result ? "Annotated" : "Needs input review"}</small>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="batch-review-pane">
+              {selectedBatchItem?.error && <div className="error-box">{selectedBatchItem.error}</div>}
+              {selectedBatchItem?.result && (
+                <ResultView
+                  result={selectedBatchItem.result}
+                  permalink={`${window.location.origin}${window.location.pathname}?${toSearchParams(selectedBatchItem.input).toString()}`}
+                  geneCurationResults={geneCurationResults}
+                  geneCurationLoading={curationLoading}
+                  geneCurationEnabled={geneCurationStatus?.enabled ?? true}
+                  geneCurationError={curationError}
+                  onCurateGenes={() => runGeneCuration(batchInputs)}
+                  onExportGeneCurationCsv={exportGeneCurationCsv}
+                />
+              )}
+              {!selectedBatchItem && (
+                <div className="notice-box">Run a batch to review individual fusion annotations here.</div>
+              )}
+            </div>
           </div>
         </section>
       )}
