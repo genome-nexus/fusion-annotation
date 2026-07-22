@@ -382,7 +382,7 @@ function GeneInformationSection({
                   </div>
                 )}
                 <div className="pmid-row">
-                  <strong>Supporting PMIDs</strong>
+                  <strong>Rationale Supporting PMIDs</strong>
                   <span>
                     {fusionItem.supporting_pmids?.length
                       ? fusionItem.supporting_pmids.map((pmid, index) => (
@@ -504,7 +504,7 @@ function GeneInformationSection({
                       </div>
                     )}
                     <div className="pmid-row">
-                      <strong>Supporting PMIDs</strong>
+                      <strong>Rationale Supporting PMIDs</strong>
                       <span>
                         {item.supporting_pmids?.length
                           ? item.supporting_pmids.map((pmid, index) => (
