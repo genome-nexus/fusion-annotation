@@ -303,10 +303,9 @@ function GeneInformationSection({
     <section className="gene-info-section">
       <div className="gene-info-header">
         <div>
-          <h3>Gene information</h3>
+          <h3>Fusion and gene information</h3>
           <p>
-            Literature-backed gene context from server-side curation, shown alongside the current fusion
-            annotation.
+            Exact-fusion evidence is checked first; gene details use OncoKB first when they are shown.
           </p>
         </div>
         <div className="gene-info-actions">
@@ -322,7 +321,7 @@ function GeneInformationSection({
               disabled={!geneCurationEnabled || geneCurationLoading}
               onClick={onCurateGenes}
             >
-              {geneCurationLoading ? "Loading literature..." : "Get literature info"}
+              {geneCurationLoading ? "Loading fusion info..." : "Get fusion info"}
             </button>
           )}
         </div>
@@ -405,22 +404,22 @@ function GeneInformationSection({
             )
           ) : (
             <p className="gene-info-empty">
-              Run literature info to check whether this exact fusion is described in PubMed.
+              Run fusion info to check whether this exact fusion is described in PubMed.
             </p>
           )}
         </details>
 
         {fusionSufficient && !geneCurationResults?.length && onForceGeneCuration && (
           <div className="notice-box gene-info-skip">
-            Fusion-specific literature was sufficient, so per-gene retrieval was skipped to reduce PubMed and LLM
-            usage.
+            Fusion-specific literature was sufficient, so gene details were skipped. Gene details use OncoKB first
+            and only fall back to literature when needed.
             <button
               type="button"
               className="secondary-button"
               disabled={geneCurationLoading}
               onClick={onForceGeneCuration}
             >
-              Get per-gene info
+              Get gene details
             </button>
           </div>
         )}
@@ -437,7 +436,7 @@ function GeneInformationSection({
                 <span className="gene-info-summary">
                   {item
                     ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
-                    : "No literature curation loaded"}
+                    : "No gene details loaded"}
                 </span>
               </summary>
               {item ? (
@@ -528,8 +527,8 @@ function GeneInformationSection({
               ) : (
                 <p className="gene-info-empty">
                   {fusionSufficient
-                    ? `Per-gene retrieval for ${gene} was skipped because fusion-specific literature was sufficient.`
-                    : `Run literature info to retrieve gene-level AGCG context for ${gene}.`}
+                    ? `Gene details for ${gene} were skipped because fusion-specific literature was sufficient.`
+                    : `Gene details for ${gene} use OncoKB first, with literature fallback only if needed.`}
                 </p>
               )}
             </details>

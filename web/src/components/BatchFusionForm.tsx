@@ -114,7 +114,7 @@ export function BatchFusionForm({
             className="secondary-button"
             onClick={handleCurate}
           >
-            {curationLoading ? "Loading literature..." : "Get literature info"}
+            {curationLoading ? "Loading fusion info..." : "Get fusion info"}
           </button>
         )}
       </div>
