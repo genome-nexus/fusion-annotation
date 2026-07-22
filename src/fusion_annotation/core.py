@@ -36,7 +36,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Protocol, Literal
-import json
 
 # ----------------------------------------------------------------------------
 # Genetic code (standard) — used to translate the reconstructed chimeric CDS.
@@ -107,7 +106,8 @@ def build_exon_cds_map(strand: int, exons: list[dict], cds_g_start: int, cds_g_e
         o_lo, o_hi = max(e["start"], cds_g_start), min(e["end"], cds_g_end)
         clen = max(0, o_hi - o_lo + 1)
         if clen:
-            out.append((pos + 1, pos + clen)); pos += clen
+            out.append((pos + 1, pos + clen))
+            pos += clen
         else:
             out.append((0, 0))
     return out
@@ -446,7 +446,7 @@ class DomainCall:
     type: str
     start: int
     end: int
-    status: Literal["RETAINED", "LOST", "DISRUPTED"]
+    status: Literal["RETAINED", "LOST", "DISRUPTED", "UNKNOWN"]
     # Which fusion partner this domain call belongs to (the 5' or 3' gene
     # symbol), and that partner's full-length protein size — both needed by
     # UI consumers (e.g. web/) to lay out a two-track domain-retention
@@ -555,8 +555,6 @@ def annotate_effect(five: Transcript, three: Transcript,
     three_first_full_cds = three_cds_start + alk_nt_in_hybrid
     three_first_aa = (three_first_full_cds - 1) // 3 + 1  # first full 3'-partner residue
 
-    # frame status
-    downstream_len = len(prot_full) - five_complete_codons
     if not in_frame:
         status = "frameshift-truncating"
     elif internal_stops > 0:
@@ -567,15 +565,21 @@ def annotate_effect(five: Transcript, three: Transcript,
     # domain retention
     dcalls: list[DomainCall] = []
     for d in (domains_five or []):
-        if d["end"] <= five_last_aa:              st = "RETAINED"
-        elif d["start"] > five_last_aa:           st = "LOST"
-        else:                                     st = "DISRUPTED"
+        if d["end"] <= five_last_aa:
+            st = "RETAINED"
+        elif d["start"] > five_last_aa:
+            st = "LOST"
+        else:
+            st = "DISRUPTED"
         dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st,
                                  gene=five.gene_symbol, partner_protein_length=len(five.protein)))
     for d in (domains_three or []):
-        if d["start"] >= three_first_aa:          st = "RETAINED"
-        elif d["end"] < three_first_aa:           st = "LOST"
-        else:                                     st = "DISRUPTED"
+        if d["start"] >= three_first_aa:
+            st = "RETAINED"
+        elif d["end"] < three_first_aa:
+            st = "LOST"
+        else:
+            st = "DISRUPTED"
         dcalls.append(DomainCall(d["accession"], d["name"], d["type"], d["start"], d["end"], st,
                                  gene=three.gene_symbol, partner_protein_length=len(three.protein)))
 
@@ -606,6 +610,15 @@ class FusionKnowledge:
 def annotate_knowledge(fp: FusionProtein, provider: DataProvider) -> FusionKnowledge:
     raw = provider.get_fusion_knowledge(fp.categorical_key())
     return FusionKnowledge(categorical_key=fp.categorical_key(), **raw)
+
+
+def _categorical_key(five_gene: str, three_gene: str) -> str:
+    return f"{five_gene}::{three_gene}"
+
+
+def _fusion_knowledge_for_key(categorical_key: str, provider: DataProvider) -> FusionKnowledge:
+    raw = provider.get_fusion_knowledge(categorical_key)
+    return FusionKnowledge(categorical_key=categorical_key, **raw)
 
 
 # Curated gene pairs that are established oncogenic fusion drivers. Used only to
@@ -642,6 +655,127 @@ def _resolve_breakpoint(tx: Transcript, side: Literal["end", "start"],
                      "supply an exon number or a genomic position")
 
 
+def _domain_architecture_calls(
+    tx: Transcript,
+    domains: list[dict],
+) -> list[DomainCall]:
+    return [
+        DomainCall(
+            d["accession"],
+            d["name"],
+            d["type"],
+            d["start"],
+            d["end"],
+            "UNKNOWN",
+            gene=tx.gene_symbol,
+            partner_protein_length=len(tx.protein),
+        )
+        for d in domains
+    ]
+
+
+def _unknown_breakpoint() -> dict:
+    return {
+        "type": "unknown",
+        "cds_coord": None,
+        "context": {
+            "region": "unknown",
+            "label": "breakpoint unknown",
+            "exon_rank": None,
+            "intron_rank": None,
+            "exon_offset": None,
+            "exon_length": None,
+            "boundary": None,
+        },
+    }
+
+
+def _echo_partner_without_breakpoint(tx: Transcript, user_tx: Optional[str]) -> dict:
+    if user_tx:
+        source = "user-specified"
+    elif tx.is_canonical:
+        source = "canonical"
+    elif tx.is_canonical is False:
+        source = "non-canonical"
+    else:
+        source = "provider-default"
+    return {
+        "gene": tx.gene_symbol,
+        "transcript": tx.transcript_id,
+        "transcript_source": source,
+        "breakpoint": _unknown_breakpoint(),
+        "protein_length": len(tx.protein),
+        "structure": _build_transcript_structure(tx),
+    }
+
+
+def _annotate_gene_pair_only(
+    provider: DataProvider,
+    five: Transcript,
+    three: Transcript,
+    *,
+    five_tx: Optional[str],
+    three_tx: Optional[str],
+    five_bp: Optional[dict] = None,
+    three_bp: Optional[dict] = None,
+) -> dict:
+    dfive = provider.get_domains(five.uniprot) if five.uniprot else []
+    dthree = provider.get_domains(three.uniprot) if three.uniprot else []
+    categorical_key = _categorical_key(five.gene_symbol, three.gene_symbol)
+    kn = _fusion_knowledge_for_key(categorical_key, provider)
+    interface = {
+        "five_gene": five.gene_symbol,
+        "three_gene": three.gene_symbol,
+        "five_transcript": five.transcript_id,
+        "three_transcript": three.transcript_id,
+        "five_last_aa": None,
+        "three_first_aa": None,
+        "five_last_aa_res": None,
+        "three_first_aa_res": None,
+        "in_frame": None,
+        "hybrid_codon": False,
+        "junction_residue": None,
+        "fusion_length": None,
+        "internal_stops": None,
+        "fusion_protein_seq": "",
+        "frame_status": "unknown",
+        "domains": [
+            asdict(domain)
+            for domain in (
+                _domain_architecture_calls(five, dfive)
+                + _domain_architecture_calls(three, dthree)
+            )
+        ],
+        "breakpoint_label": None,
+        "categorical_key": categorical_key,
+        "hgvsp_like": f"{categorical_key} (breakpoint unknown)",
+    }
+    resolved = {
+        "genome_build": getattr(provider, "assembly", "GRCh38"),
+        "five": (
+            _echo_partner(five, five_tx, five_bp, "end")
+            if five_bp is not None
+            else _echo_partner_without_breakpoint(five, five_tx)
+        ),
+        "three": (
+            _echo_partner(three, three_tx, three_bp, "start")
+            if three_bp is not None
+            else _echo_partner_without_breakpoint(three, three_tx)
+        ),
+    }
+    warnings = [
+        (
+            "One or both exon/genomic breakpoints were not supplied, so this is a gene-pair-only "
+            "annotation. Protein junction, reading frame, fusion length, and retained/lost "
+            "domain calls were not inferred."
+        )
+    ]
+    domain_warn = getattr(provider, "_domain_warning", None)
+    if domain_warn:
+        warnings.append(domain_warn)
+    return {"interface": interface, "knowledge": asdict(kn), "resolved": resolved, "warnings": warnings}
+
+
 # ----------------------------------------------------------------------------
 # Orchestration: the full three-layer annotate() call.
 # ----------------------------------------------------------------------------
@@ -671,6 +805,29 @@ def annotate_fusion(provider: DataProvider,
         f_three = pool.submit(provider.get_transcript, three_tx or three_gene)
         five = f_five.result()
         three = f_three.result()
+
+    five_has_breakpoint = five_exon is not None or five_genomic is not None
+    three_has_breakpoint = three_exon is not None or three_genomic is not None
+    if not (five_has_breakpoint and three_has_breakpoint):
+        five_bp = (
+            _resolve_breakpoint(five, "end", five_exon, five_genomic)[1]
+            if five_has_breakpoint
+            else None
+        )
+        three_bp = (
+            _resolve_breakpoint(three, "start", three_exon, three_genomic)[1]
+            if three_has_breakpoint
+            else None
+        )
+        return _annotate_gene_pair_only(
+            provider,
+            five,
+            three,
+            five_tx=five_tx,
+            three_tx=three_tx,
+            five_bp=five_bp,
+            three_bp=three_bp,
+        )
 
     five_cds_end, five_bp = _resolve_breakpoint(five, "end", five_exon, five_genomic)
     three_cds_start, three_bp = _resolve_breakpoint(three, "start", three_exon, three_genomic)

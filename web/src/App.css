@@ -272,12 +272,22 @@ header .tagline {
   color: #c92a2a;
 }
 
+.summary-grid dd.neutral {
+  color: #5c6770;
+}
+
 .domain-diagram {
   background: #f8f9fa;
   border: 1px solid #dee2e6;
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 16px;
+}
+
+.domain-diagram-note {
+  color: #5c6770;
+  font-size: 0.9rem;
+  margin: 8px 0 10px;
 }
 
 .diagram-toggle {

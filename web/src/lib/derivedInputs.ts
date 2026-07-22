@@ -17,9 +17,9 @@ export interface PartnerDerived {
   /** 1-based exon rank (last exon for 5′ partner, first exon for 3′ partner) */
   exon: number | null;
   /** 1-based CDS nucleotide coordinate */
-  cds: number;
+  cds: number | null;
   /** Amino-acid position (last for 5′, first for 3′) */
-  protein: number;
+  protein: number | null;
 }
 
 export interface DerivedInputs {
@@ -59,7 +59,7 @@ function exonBoundaryGenomic(
 
 function derivePartner(
   partner: ResolvedPartner,
-  proteinAa: number,
+  proteinAa: number | null,
   side: "five" | "three",
 ): PartnerDerived {
   const { breakpoint, gene, transcript } = partner;
@@ -77,7 +77,7 @@ function derivePartner(
     transcript,
     genomic,
     exon: breakpoint.context.exon_rank ?? null,
-    cds: breakpoint.cds_coord,
+    cds: breakpoint.cds_coord ?? null,
     protein: proteinAa,
   };
 }

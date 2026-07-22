@@ -219,6 +219,14 @@ def test_out_of_frame_warning_is_context_aware_for_genomic(provider):
 
 
 # ---- missing breakpoint ----------------------------------------------------
-def test_missing_breakpoint_raises(provider):
-    with pytest.raises(ValueError):
-        annotate_fusion(provider, "EML4", "ALK", five_exon=13)
+def test_missing_breakpoint_returns_gene_pair_only(provider):
+    result = annotate_fusion(provider, "EML4", "ALK", five_exon=13)
+
+    assert result["interface"]["categorical_key"] == "EML4::ALK"
+    assert result["interface"]["frame_status"] == "unknown"
+    assert result["interface"]["five_last_aa"] is None
+    assert result["interface"]["three_first_aa"] is None
+    assert result["resolved"]["five"]["breakpoint"]["type"] == "exon"
+    assert result["resolved"]["five"]["breakpoint"]["context"]["label"] == "after exon 13"
+    assert result["resolved"]["three"]["breakpoint"]["type"] == "unknown"
+    assert "gene-pair-only annotation" in result["warnings"][0]

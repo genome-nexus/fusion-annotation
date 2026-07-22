@@ -4,7 +4,7 @@
 // sees component exports there.
 import type { DomainCall, ResolvedPartner, TranscriptStructure } from "./types";
 
-export type Status = "RETAINED" | "LOST" | "DISRUPTED";
+export type Status = "RETAINED" | "LOST" | "DISRUPTED" | "UNKNOWN";
 
 export interface CanonDomain {
   name: string;

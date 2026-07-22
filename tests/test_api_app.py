@@ -89,17 +89,24 @@ def test_annotate_batch_returns_per_fusion_results(client):
     r = client.post("/api/annotate/batch", json={
         "fusions": [
             {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+            {"five_gene": "EML4", "three_gene": "ALK"},
             {"five_gene": "NOPE_NOT_A_GENE", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
         ]
     })
 
     assert r.status_code == 200
     body = r.json()
-    assert len(body["results"]) == 2
+    assert len(body["results"]) == 3
     assert body["results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
     assert body["results"][0]["error"] is None
-    assert body["results"][1]["result"] is None
-    assert "NOPE_NOT_A_GENE" in body["results"][1]["error"]
+    gene_pair = body["results"][1]
+    assert gene_pair["error"] is None
+    assert gene_pair["result"]["interface"]["frame_status"] == "unknown"
+    assert gene_pair["result"]["interface"]["five_last_aa"] is None
+    assert gene_pair["result"]["resolved"]["five"]["breakpoint"]["type"] == "unknown"
+    assert "gene-pair-only annotation" in gene_pair["result"]["warnings"][0]
+    assert body["results"][2]["result"] is None
+    assert "NOPE_NOT_A_GENE" in body["results"][2]["error"]
 
 
 def test_annotate_batch_reuses_provider_by_species_and_build(monkeypatch):
@@ -216,9 +223,14 @@ def test_annotate_unknown_gene_is_400(client):
     assert "NOPE_NOT_A_GENE" in r.json()["detail"]
 
 
-def test_annotate_no_breakpoint_given_is_400(client):
+def test_annotate_no_breakpoint_given_is_gene_pair_only(client):
     r = client.get("/api/annotate", params={"five_gene": "EML4", "three_gene": "ALK"})
-    assert r.status_code == 400
+    assert r.status_code == 200
+    body = r.json()
+    assert body["interface"]["categorical_key"] == "EML4::ALK"
+    assert body["interface"]["frame_status"] == "unknown"
+    assert body["interface"]["domains"][0]["status"] == "UNKNOWN"
+    assert body["knowledge"]["oncogenic"] == "Oncogenic"
 
 
 def test_cors_headers_present(client):

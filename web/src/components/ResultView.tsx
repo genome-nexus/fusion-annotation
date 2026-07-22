@@ -31,12 +31,12 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function PartnerBreakpoints({ label, p, aa }: { label: string; p: PartnerDerived; aa: number }) {
+function PartnerBreakpoints({ label, p, aa }: { label: string; p: PartnerDerived; aa: number | null }) {
   const rows: Array<{ name: string; value: string | null }> = [
     { name: "Genomic", value: p.genomic },
     { name: "Exon", value: p.exon != null ? `exon ${p.exon}` : null },
-    { name: "CDS", value: `c.${p.cds}` },
-    { name: "Protein", value: `aa ${aa}` },
+    { name: "CDS", value: p.cds != null ? `c.${p.cds}` : null },
+    { name: "Protein", value: aa != null ? `aa ${aa}` : null },
   ];
   return (
     <div className="equiv-partner">
@@ -107,6 +107,8 @@ export function ResultView({ result, permalink }: Props) {
   const [diagramView, setDiagramView] = useState<DiagramView>("domain");
   const hasTranscriptStructure = Boolean(resolved.five.structure || resolved.three.structure);
   const derived = computeDerivedInputs(result);
+  const hasProteinBreakpoint = iface.five_last_aa != null && iface.three_first_aa != null;
+  const frameClass = iface.in_frame == null ? "neutral" : iface.in_frame ? "ok" : "bad";
 
   return (
     <div className="result-view">
@@ -134,17 +136,25 @@ export function ResultView({ result, permalink }: Props) {
         <dt>Categorical fusion</dt>
         <dd>{iface.categorical_key}</dd>
         <dt>Frame</dt>
-        <dd className={iface.in_frame ? "ok" : "bad"}>
-          {iface.frame_status} (protein {iface.fusion_length} aa, internal stops {iface.internal_stops})
+        <dd className={frameClass}>
+          {iface.frame_status === "unknown"
+            ? "Unknown; breakpoint required for protein reconstruction"
+            : `${iface.frame_status} (protein ${iface.fusion_length} aa, internal stops ${iface.internal_stops})`}
         </dd>
         <dt>Junction</dt>
         <dd>
-          {iface.five_gene} {iface.five_last_aa_res}
-          {iface.five_last_aa} :: {iface.three_gene} {iface.three_first_aa_res}
-          {iface.three_first_aa}
-          {iface.hybrid_codon && iface.junction_residue
-            ? ` (hybrid codon → ${iface.junction_residue})`
-            : ""}
+          {hasProteinBreakpoint
+            ? (
+                <>
+                  {iface.five_gene} {iface.five_last_aa_res}
+                  {iface.five_last_aa} :: {iface.three_gene} {iface.three_first_aa_res}
+                  {iface.three_first_aa}
+                  {iface.hybrid_codon && iface.junction_residue
+                    ? ` (hybrid codon → ${iface.junction_residue})`
+                    : ""}
+                </>
+              )
+            : "Unknown; exon or genomic breakpoint not supplied"}
         </dd>
         <dt>Genome build</dt>
         <dd>{resolved.genome_build}</dd>
@@ -197,7 +207,13 @@ export function ResultView({ result, permalink }: Props) {
         />
       )}
 
-      <EquivalentInputs derived={derived} result={result} />
+      {hasProteinBreakpoint ? (
+        <EquivalentInputs derived={derived} result={result} />
+      ) : (
+        <div className="notice-box">
+          Equivalent breakpoint representations are unavailable until exon or genomic breakpoints are supplied.
+        </div>
+      )}
 
       <DomainTable domains={iface.domains} />
 

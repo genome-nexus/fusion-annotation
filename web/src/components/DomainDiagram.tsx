@@ -13,12 +13,12 @@ interface Props {
   domains: DomainCall[];
   fiveGene: string;
   threeGene: string;
-  fiveLastAa: number;
-  threeFirstAa: number;
+  fiveLastAa: number | null;
+  threeFirstAa: number | null;
   fiveLength: number;
   threeLength: number;
   hybridCodon: boolean;
-  fusionLength: number;
+  fusionLength: number | null;
 }
 
 const TRACK_WIDTH = 640;
@@ -76,8 +76,8 @@ function ProteinTrack({
       {domains.map((d) => {
         const x1 = scale(d.start);
         const x2 = scale(d.end);
-        const opacity = d.status === "RETAINED" ? 1 : d.status === "DISRUPTED" ? 0.85 : 0.35;
-        const dashed = d.status === "DISRUPTED";
+        const opacity = d.status === "RETAINED" ? 1 : d.status === "DISRUPTED" ? 0.85 : 0.7;
+        const dashed = d.status === "DISRUPTED" || d.status === "UNKNOWN";
         return (
           <rect
             key={`${d.name}-${d.start}-${d.end}`}
@@ -139,9 +139,10 @@ export function DomainDiagram({
 
   const fiveDomains = canonicalizeDomains(domains, fiveGene);
   const threeDomains = canonicalizeDomains(domains, threeGene);
+  const hasBreakpoints = fiveLastAa != null && threeFirstAa != null && fusionLength != null;
 
-  const threeOffset = fiveLastAa + (hybridCodon ? 1 : 0) - threeFirstAa + 1;
-  const fusionDomains: CanonDomain[] = [
+  const threeOffset = hasBreakpoints ? fiveLastAa + (hybridCodon ? 1 : 0) - threeFirstAa + 1 : 0;
+  const fusionDomains: CanonDomain[] = hasBreakpoints ? [
     ...fiveDomains
       .filter((d) => d.status !== "LOST")
       .map((d) => ({ ...d, end: Math.min(d.end, fiveLastAa) })),
@@ -153,11 +154,11 @@ export function DomainDiagram({
         start: Math.max(d.start, threeFirstAa) + threeOffset,
         end: d.end + threeOffset,
       })),
-  ].sort((a, b) => a.start - b.start);
+  ].sort((a, b) => a.start - b.start) : [];
 
-  const h1 = trackHeight(fiveDomains, fiveLength, true);
-  const h2 = trackHeight(threeDomains, threeLength, true);
-  const h3 = trackHeight(fusionDomains, fusionLength, false);
+  const h1 = trackHeight(fiveDomains, fiveLength, hasBreakpoints);
+  const h2 = trackHeight(threeDomains, threeLength, hasBreakpoints);
+  const h3 = hasBreakpoints ? trackHeight(fusionDomains, fusionLength, false) : 0;
   const y1 = TITLE_SPACE;
   const y2 = y1 + h1;
   const y3 = y2 + h2;
@@ -170,8 +171,8 @@ export function DomainDiagram({
         <ProteinTrack
           label={fiveGene}
           proteinLength={fiveLength}
-          breakpointAa={fiveLastAa}
-          breakpointLabel={`breakpoint aa ${fiveLastAa}`}
+          breakpointAa={hasBreakpoints ? fiveLastAa : null}
+          breakpointLabel={hasBreakpoints ? `breakpoint aa ${fiveLastAa}` : undefined}
           domains={fiveDomains}
           y={y1}
           onHover={setHovered}
@@ -179,29 +180,37 @@ export function DomainDiagram({
         <ProteinTrack
           label={threeGene}
           proteinLength={threeLength}
-          breakpointAa={threeFirstAa}
-          breakpointLabel={`breakpoint aa ${threeFirstAa}`}
+          breakpointAa={hasBreakpoints ? threeFirstAa : null}
+          breakpointLabel={hasBreakpoints ? `breakpoint aa ${threeFirstAa}` : undefined}
           domains={threeDomains}
           y={y2}
           onHover={setHovered}
         />
-        <ProteinTrack
-          label={`${fiveGene}::${threeGene} fusion protein`}
-          proteinLength={fusionLength}
-          breakpointAa={fiveLastAa}
-          domains={fusionDomains}
-          y={y3}
-          onHover={setHovered}
-        />
+        {hasBreakpoints && (
+          <ProteinTrack
+            label={`${fiveGene}::${threeGene} fusion protein`}
+            proteinLength={fusionLength}
+            breakpointAa={fiveLastAa}
+            domains={fusionDomains}
+            y={y3}
+            onHover={setHovered}
+          />
+        )}
       </svg>
+      {!hasBreakpoints && (
+        <div className="domain-diagram-note">
+          Breakpoints were not supplied, so this shows partner domain architecture only. Fusion protein and
+          retained/lost domain calls require exon or genomic breakpoints.
+        </div>
+      )}
       <div className="domain-legend">
         <span><i style={{ background: "#2f9e44" }} /> WD40 / β-propeller</span>
         <span><i style={{ background: "#e8590c" }} /> Kinase</span>
         <span><i style={{ background: "#0c8599" }} /> HELP</span>
         <span><i style={{ background: "#1971c2" }} /> MAM domain</span>
         <span><i style={{ background: "#495057" }} /> Other (stable per-name color)</span>
-        <span className="legend-note">Retained = solid · Disrupted = dashed border, 85% opacity · Lost = 35% opacity</span>
-        <span><i className="junction-swatch" /> Breakpoint</span>
+        <span className="legend-note">Retained = solid · Unknown/disrupted = dashed border · Lost = faded</span>
+        {hasBreakpoints && <span><i className="junction-swatch" /> Breakpoint</span>}
       </div>
       {hovered && (
         <div className="domain-tooltip">

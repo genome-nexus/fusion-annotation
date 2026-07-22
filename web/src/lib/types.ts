@@ -2,7 +2,7 @@
 // which is itself annotate_fusion()'s return value
 // (src/fusion_annotation/core.py): {"interface", "knowledge", "resolved", "warnings"}.
 
-export type DomainStatus = "RETAINED" | "LOST" | "DISRUPTED";
+export type DomainStatus = "RETAINED" | "LOST" | "DISRUPTED" | "UNKNOWN";
 export type BreakpointContextRegion =
   | "upstream"
   | "utr5"
@@ -63,17 +63,17 @@ export interface FusionInterface {
   three_gene: string;
   five_transcript: string;
   three_transcript: string;
-  five_last_aa: number;
-  three_first_aa: number;
-  five_last_aa_res: string;
-  three_first_aa_res: string;
-  in_frame: boolean;
+  five_last_aa: number | null;
+  three_first_aa: number | null;
+  five_last_aa_res: string | null;
+  three_first_aa_res: string | null;
+  in_frame: boolean | null;
   hybrid_codon: boolean;
   junction_residue: string | null;
-  fusion_length: number;
-  internal_stops: number;
+  fusion_length: number | null;
+  internal_stops: number | null;
   fusion_protein_seq: string;
-  frame_status: "in-frame" | "out-of-frame" | "frameshift-truncating";
+  frame_status: "in-frame" | "out-of-frame" | "frameshift-truncating" | "unknown";
   domains: DomainCall[];
   breakpoint_label: string | null;
   categorical_key: string;
@@ -94,10 +94,10 @@ export interface ResolvedPartner {
   transcript: string;
   transcript_source: "user-specified" | "canonical" | "non-canonical" | "provider-default";
   breakpoint: {
-    type: "genomic" | "exon";
+    type: "genomic" | "exon" | "unknown";
     exon?: number;
     genomic_position?: number;
-    cds_coord: number;
+    cds_coord: number | null;
     context: BreakpointContext;
   };
   /** Full-length (untruncated) protein size for this partner. Used to lay
