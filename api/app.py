@@ -203,19 +203,17 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
     Nexus/CIViC setup work is not repeated for every row. Individual bad inputs
     are returned as per-item errors instead of failing the whole batch.
     """
-    try:
-        provider = make_provider(
-            species=params.fusions[0].species,
-            assembly=params.fusions[0].genome_build,
-        )
-    except requests.exceptions.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"upstream annotation source error: {exc}") from exc
-
+    providers = {}
     results = []
     for item in params.fusions:
         try:
-            if item.species != params.fusions[0].species or item.genome_build != params.fusions[0].genome_build:
-                provider = make_provider(species=item.species, assembly=item.genome_build)
+            provider_key = (item.species, item.genome_build)
+            if provider_key not in providers:
+                providers[provider_key] = make_provider(
+                    species=item.species,
+                    assembly=item.genome_build,
+                )
+            provider = providers[provider_key]
             result = _annotate_with_provider(provider, item)
             results.append(BatchAnnotateItemResult(input=item, result=result))
         except (ValueError, KeyError) as exc:
