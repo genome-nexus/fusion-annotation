@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fusion_annotation.core import annotate_fusion  # noqa: E402
 from fusion_annotation.gene_curation import (  # noqa: E402
+    DEFAULT_CURATION_MODEL,
     GeneCurationUnavailable,
     curate_fusion_genes,
 )
@@ -289,7 +290,7 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
 def gene_curation_status() -> dict:
     return {
         "enabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "model": os.environ.get("FUSION_GENE_CURATION_MODEL", "claude-3-5-haiku-latest"),
+        "model": os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL),
     }
 
 

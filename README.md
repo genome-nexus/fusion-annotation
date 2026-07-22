@@ -428,7 +428,9 @@ rate limit during literature retrieval. Store it as a local `.env` entry or a
 deployment secret; do not commit it. The curation service also throttles PubMed
 requests across parallel gene workers and retries transient NCBI 429/5xx
 responses. `FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS` can be set to tune
-the minimum delay between NCBI requests for a deployment.
+the minimum delay between NCBI requests for a deployment. The default curation
+model is `claude-haiku-4-5-20251001`; set `FUSION_GENE_CURATION_MODEL` to
+override it.
 
 Run both locally:
 

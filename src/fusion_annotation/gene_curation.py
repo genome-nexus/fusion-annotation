@@ -21,6 +21,7 @@ import requests
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+DEFAULT_CURATION_MODEL = "claude-haiku-4-5-20251001"
 
 
 @dataclass(frozen=True)
@@ -496,7 +497,7 @@ def curate_gene(
     anthropic_api_key: str,
     ncbi_api_key: str = "",
     ncbi_client: Optional[NcbiClient] = None,
-    model: str = "claude-3-5-haiku-latest",
+    model: str = DEFAULT_CURATION_MODEL,
     max_results: int = 8,
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
@@ -596,7 +597,7 @@ def curate_fusion_genes(
     genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
     ncbi_api_key = os.environ.get("NCBI_API_KEY", "")
     ncbi_client = NcbiClient(api_key=ncbi_api_key)
-    model = os.environ.get("FUSION_GENE_CURATION_MODEL", "claude-3-5-haiku-latest")
+    model = os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL)
     max_results = max(1, int(os.environ.get("FUSION_GENE_CURATION_MAX_RESULTS", "8")))
     abstract_chars = max(200, int(os.environ.get("FUSION_GENE_CURATION_ABSTRACT_CHARS", "1200")))
     max_workers = max(1, int(os.environ.get("FUSION_GENE_CURATION_WORKERS", "3")))
