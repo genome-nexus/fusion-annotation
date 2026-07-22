@@ -281,12 +281,14 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
 
     r = client.post("/api/gene-curation", json={
         "fusions": [
-            {"five_gene": "EML4", "three_gene": "ALK"}
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": "", "three_exon": ""}
         ]
     })
 
     assert r.status_code == 200
     assert seen["fusions"][0].five_gene == "EML4"
+    assert seen["fusions"][0].five_exon is None
+    assert seen["fusions"][0].three_exon is None
     assert seen["force_gene_curation"] is False
     assert "result" not in seen["annotation_results"][0]
     assert "no breakpoint given" in seen["annotation_results"][0]["error"]

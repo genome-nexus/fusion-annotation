@@ -28,7 +28,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -103,6 +103,13 @@ class AnnotateRequest(BaseModel):
         "GRCh38", description="Genome assembly the coordinates/transcripts come from. GRCh38 (default) or GRCh37.")
     species: str = Field(
         "homo_sapiens", description="Species identifier. Non-human species always use RestDataProvider.")
+
+    @field_validator("five_exon", "three_exon", mode="before")
+    @classmethod
+    def _blank_exon_to_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class AnnotateResponse(BaseModel):

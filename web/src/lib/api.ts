@@ -24,6 +24,19 @@ function toSearchParams(params: AnnotateParams): URLSearchParams {
   return search;
 }
 
+function cleanAnnotateParams(params: AnnotateParams) {
+  const cleaned: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    if ((key === "five_exon" || key === "three_exon") && typeof value === "string") {
+      cleaned[key] = Number(value);
+    } else {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
+}
+
 /** FastAPI/Pydantic validation errors (HTTP 422) return `detail` as a list of
  * {loc, msg, type} objects rather than a plain string; every other error
  * path in api/app.py (HTTPException) returns a string. Normalize both into a
@@ -71,7 +84,7 @@ export async function annotateFusionBatch(
   const response = await fetch(`${API_BASE_URL}/api/annotate/batch`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fusions }),
+    body: JSON.stringify({ fusions: fusions.map(cleanAnnotateParams) }),
     signal,
   });
   if (!response.ok) {
@@ -112,7 +125,10 @@ export async function curateFusionGenes(
   const response = await fetch(`${API_BASE_URL}/api/gene-curation`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fusions, force_gene_curation: forceGeneCuration }),
+    body: JSON.stringify({
+      fusions: fusions.map(cleanAnnotateParams),
+      force_gene_curation: forceGeneCuration,
+    }),
     signal,
   });
   if (!response.ok) {
