@@ -48,6 +48,7 @@ function App() {
     setError(null);
     setResult(null);
     setBatchResults(null);
+    setBatchLoading(false);
     setDerived(null);
 
     if (shouldPushState) {
@@ -100,8 +101,6 @@ function App() {
       const response = await annotateFusionBatch(fusions, controller.signal);
       if (requestSequence.current !== requestId) return;
       setBatchResults(response.results);
-      const firstSuccessful = response.results.find((item) => item.result)?.result;
-      setDerived(firstSuccessful ? computeDerivedInputs(firstSuccessful) : null);
     } catch (err) {
       if (controller.signal.aborted || requestSequence.current !== requestId) return;
       setError(err as ApiError);

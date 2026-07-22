@@ -21,6 +21,9 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
   if (!fiveExon || !threeExon) {
     throw new Error(`Batch exon mode requires five_exon and three_exon: ${line}`);
   }
+  if (!/^\d+$/.test(fiveExon) || !/^\d+$/.test(threeExon)) {
+    throw new Error(`Exon numbers must be positive integers: ${line}`);
+  }
   return {
     five_gene: fiveGene,
     three_gene: threeGene,
