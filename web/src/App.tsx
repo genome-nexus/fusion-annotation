@@ -19,6 +19,7 @@ import type {
   AnnotationResult,
   ApiError,
   BatchAnnotationItemResult,
+  GeneCurationFusionResult,
   GeneCurationGeneResult,
   GeneCurationStatus,
 } from "./lib/types";
@@ -38,8 +39,10 @@ function paramsFromLocation(): AnnotateParams {
 }
 
 const CURATION_CSV_HEADERS = [
+  "row_type",
   "gene",
   "fusion",
+  "fusion_literature_identified",
   "gene_side",
   "partner_gene",
   "breakpoint_context_available",
@@ -72,16 +75,62 @@ function csvCell(value: unknown) {
   return `"${text.replaceAll('"', '""')}"`;
 }
 
-function curationCsvRows(items: GeneCurationGeneResult[]) {
+function curationCsvRows(
+  fusionItems: GeneCurationFusionResult[],
+  geneItems: GeneCurationGeneResult[],
+) {
   const rows = [CURATION_CSV_HEADERS.map(csvCell).join(",")];
-  for (const item of items) {
+  for (const item of fusionItems) {
     const contexts = item.fusion_contexts?.length
       ? item.fusion_contexts
       : [null];
     for (const context of contexts) {
       rows.push([
+        "fusion",
+        context?.gene,
+        item.fusion,
+        item.fusion_literature_identified == null
+          ? ""
+          : item.fusion_literature_identified ? "TRUE" : "FALSE",
+        context?.side,
+        context?.partner_gene,
+        context?.breakpoint_context_available == null
+          ? ""
+          : context.breakpoint_context_available ? "TRUE" : "FALSE",
+        context?.fusion_specificity,
+        context?.five_transcript,
+        context?.three_transcript,
+        context?.five_exon,
+        context?.three_exon,
+        context?.five_genomic,
+        context?.three_genomic,
+        context?.five_protein_breakpoint,
+        context?.three_protein_breakpoint,
+        context?.retained_domains,
+        [...(context?.lost_domains || []), ...(context?.disrupted_domains || [])],
+        context?.kinase_gene,
+        context?.kinase_gene_side,
+        context?.kinase_domain_status,
+        context?.limitations,
+        item.cancer_associated == null ? "" : item.cancer_associated ? "TRUE" : "FALSE",
+        item.rationale,
+        item.supporting_pmids,
+        item.retrieved_pmids,
+        item.insufficient_evidence ? "TRUE" : "FALSE",
+        item.error || context?.annotation_error,
+      ].map(csvCell).join(","));
+    }
+  }
+  for (const item of geneItems) {
+    const contexts = item.fusion_contexts?.length
+      ? item.fusion_contexts
+      : [null];
+    for (const context of contexts) {
+      rows.push([
+        "gene",
         item.gene,
         context?.fusion,
+        "",
         context?.side,
         context?.partner_gene,
         context?.breakpoint_context_available == null
@@ -135,6 +184,7 @@ function App() {
   const [batchResults, setBatchResults] = useState<BatchAnnotationItemResult[] | null>(null);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(0);
   const [geneCurationStatus, setGeneCurationStatus] = useState<GeneCurationStatus | null>(null);
+  const [fusionCurationResults, setFusionCurationResults] = useState<GeneCurationFusionResult[] | null>(null);
   const [geneCurationResults, setGeneCurationResults] = useState<GeneCurationGeneResult[] | null>(null);
   const [derived, setDerived] = useState<DerivedInputs | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -165,6 +215,7 @@ function App() {
     setBatchResults(null);
     setSelectedBatchIndex(0);
     setBatchLoading(false);
+    setFusionCurationResults(null);
     setGeneCurationResults(null);
     setCurationError(null);
     setCurationLoading(false);
@@ -219,6 +270,7 @@ function App() {
     setDerived(null);
     setBatchResults(null);
     setSelectedBatchIndex(0);
+    setFusionCurationResults(null);
     setGeneCurationResults(null);
     setCurationError(null);
     setCurationLoading(false);
@@ -241,7 +293,7 @@ function App() {
     }
   }, []);
 
-  const runGeneCuration = useCallback(async (fusions: AnnotateParams[]) => {
+  const runGeneCuration = useCallback(async (fusions: AnnotateParams[], forceGeneCuration = false) => {
     activeCurationRequest.current?.abort();
     const controller = new AbortController();
     activeCurationRequest.current = controller;
@@ -250,11 +302,13 @@ function App() {
 
     setCurationLoading(true);
     setCurationError(null);
+    setFusionCurationResults(null);
     setGeneCurationResults(null);
 
     try {
-      const response = await curateFusionGenes(fusions, controller.signal);
+      const response = await curateFusionGenes(fusions, forceGeneCuration, controller.signal);
       if (curationRequestSequence.current !== requestId) return;
+      setFusionCurationResults(response.fusions || []);
       setGeneCurationResults(response.genes);
     } catch (err) {
       if (controller.signal.aborted || curationRequestSequence.current !== requestId) return;
@@ -270,13 +324,13 @@ function App() {
   }, []);
 
   const exportGeneCurationCsv = useCallback(() => {
-    if (!geneCurationResults?.length) return;
+    if (!geneCurationResults?.length && !fusionCurationResults?.length) return;
     downloadText(
       "fusion_gene_curation.csv",
-      curationCsvRows(geneCurationResults),
+      curationCsvRows(fusionCurationResults || [], geneCurationResults || []),
       "text/csv;charset=utf-8",
     );
-  }, [geneCurationResults]);
+  }, [fusionCurationResults, geneCurationResults]);
 
   const selectedBatchItem = batchResults?.[selectedBatchIndex] ?? null;
   const batchInputs = batchResults?.map((item) => item.input) ?? [];
@@ -382,11 +436,13 @@ function App() {
         <ResultView
           result={result}
           permalink={permalink}
+          fusionCurationResults={fusionCurationResults}
           geneCurationResults={geneCurationResults}
           geneCurationLoading={curationLoading}
           geneCurationEnabled={geneCurationStatus?.enabled ?? true}
           geneCurationError={curationError}
           onCurateGenes={() => runGeneCuration([formValues])}
+          onForceGeneCuration={() => runGeneCuration([formValues], true)}
           onExportGeneCurationCsv={exportGeneCurationCsv}
         />
       )}
@@ -398,9 +454,9 @@ function App() {
               <h2>Batch results</h2>
               <p>Select a completed run to inspect it with the same annotation view used for a single fusion.</p>
             </div>
-            {geneCurationResults?.length ? (
+            {geneCurationResults?.length || fusionCurationResults?.length ? (
               <button type="button" className="secondary-button" onClick={exportGeneCurationCsv}>
-                Export gene CSV
+                Export curation CSV
               </button>
             ) : null}
           </div>
@@ -428,11 +484,13 @@ function App() {
                 <ResultView
                   result={selectedBatchItem.result}
                   permalink={`${window.location.origin}${window.location.pathname}?${toSearchParams(selectedBatchItem.input).toString()}`}
+                  fusionCurationResults={fusionCurationResults}
                   geneCurationResults={geneCurationResults}
                   geneCurationLoading={curationLoading}
                   geneCurationEnabled={geneCurationStatus?.enabled ?? true}
                   geneCurationError={curationError}
                   onCurateGenes={() => runGeneCuration(batchInputs)}
+                  onForceGeneCuration={() => runGeneCuration(batchInputs, true)}
                   onExportGeneCurationCsv={exportGeneCurationCsv}
                 />
               )}

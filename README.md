@@ -417,11 +417,17 @@ CD74::ROS1
 
 In the web UI, AGCG-style curation appears as an expandable **Gene information**
 section at the bottom of each fusion annotation result rather than as a separate
-top-level results block. Each involved gene can be expanded to review the
-literature-backed driver signal, confidence label, rationale, supporting PMIDs,
-retrieved PMIDs, and any Genome Nexus fusion-position context used by the
-curation run. Batch results are reviewed from a selectable list; choosing a
-completed row opens the same result view used by the single-fusion workflow.
+top-level results block. Curation runs fusion-first: it retrieves and summarizes
+literature for the exact fusion, including whether the fusion itself is
+identified in PubMed, driver/actionability rationale, supporting PMIDs,
+retrieved PMIDs, and any Genome Nexus fusion-position context used by the run.
+When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
+skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
+per-gene override when deeper review is needed. When exact-fusion literature is
+sparse, the two involved gene sections can be expanded to review gene-level
+driver signal, confidence label, rationale, supporting PMIDs, and retrieved
+PMIDs. Batch results are reviewed from a selectable list; choosing a completed
+row opens the same result view used by the single-fusion workflow.
 
 Set `NCBI_API_KEY` in the API environment to use a higher PubMed E-utilities
 rate limit during literature retrieval. Store it as a local `.env` entry or a

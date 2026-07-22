@@ -222,10 +222,12 @@ def test_gene_curation_status_reports_disabled_without_key(client, monkeypatch):
 def test_gene_curation_uses_server_side_service(client, monkeypatch):
     seen = {}
 
-    def fake_curate_fusion_genes(fusions, annotation_results=None):
+    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
+        seen["force_gene_curation"] = force_gene_curation
         return {
+            "fusions": [],
             "genes": [
                 {
                     "gene": "ALK",
@@ -249,16 +251,19 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
     assert r.status_code == 200
     assert seen["fusions"][0].five_gene == "EML4"
     assert seen["annotation_results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
+    assert seen["force_gene_curation"] is False
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
 def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
     seen = {}
 
-    def fake_curate_fusion_genes(fusions, annotation_results=None):
+    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
+        seen["force_gene_curation"] = force_gene_curation
         return {
+            "fusions": [],
             "genes": [
                 {
                     "gene": "ROS1",
@@ -282,6 +287,7 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
 
     assert r.status_code == 200
     assert seen["fusions"][0].five_gene == "EML4"
+    assert seen["force_gene_curation"] is False
     assert "result" not in seen["annotation_results"][0]
     assert "no breakpoint given" in seen["annotation_results"][0]["error"]
     assert r.json()["genes"][0]["gene"] == "ROS1"
@@ -302,7 +308,9 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "breakpoint context unavailable" in result_view_tsx
     assert "fusion_specificity" in app_tsx
     assert "fusion-curation-context" in result_view_tsx
-    assert "Export gene CSV" in result_view_tsx
+    assert "Export curation CSV" in result_view_tsx
+    assert "Fusion in literature" in result_view_tsx
+    assert "Get per-gene info" in result_view_tsx
     assert "fusion_gene_curation.csv" in app_tsx
     assert ".workflow-tabs" in styles
     assert ".batch-review-layout" in styles

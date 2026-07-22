@@ -523,6 +523,14 @@ header .tagline {
   padding: 12px 14px 14px;
 }
 
+.gene-info-skip {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+
 .status-chip {
   border-radius: 999px;
   background: #d3f9d8;
@@ -1056,6 +1064,11 @@ a code {
 
   .gene-info-actions {
     justify-content: flex-start;
+  }
+
+  .gene-info-skip {
+    align-items: flex-start;
+    display: grid;
   }
 
   .gene-info-item summary {

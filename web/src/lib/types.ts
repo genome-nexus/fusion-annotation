@@ -169,7 +169,20 @@ export interface GeneCurationGeneResult {
   error?: string;
 }
 
+export interface GeneCurationFusionResult {
+  fusion: string;
+  fusion_literature_identified?: boolean | null;
+  cancer_associated?: boolean | null;
+  rationale?: string;
+  supporting_pmids?: string[];
+  retrieved_pmids?: string[];
+  fusion_contexts?: GeneFusionCurationContext[];
+  insufficient_evidence?: boolean;
+  error?: string;
+}
+
 export interface GeneCurationResponse {
+  fusions?: GeneCurationFusionResult[];
   genes: GeneCurationGeneResult[];
 }
 

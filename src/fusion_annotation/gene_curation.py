@@ -338,6 +338,29 @@ def fusion_contexts_by_gene(
     return contexts
 
 
+def fusion_contexts_by_fusion(
+    fusions: Iterable[object],
+    annotation_results: Optional[Iterable[dict]] = None,
+) -> dict[str, list[FusionCurationContext]]:
+    result_items = list(annotation_results or [])
+    contexts: dict[str, list[FusionCurationContext]] = {}
+    for index, fusion in enumerate(fusions):
+        item = result_items[index] if index < len(result_items) else {}
+        result = item.get("result") if isinstance(item, dict) else None
+        error = item.get("error") if isinstance(item, dict) else None
+        label = _fusion_label(fusion)
+        for gene in (_fusion_value(fusion, "five_gene"), _fusion_value(fusion, "three_gene")):
+            if gene is None:
+                continue
+            normalized = str(gene).strip().upper()
+            if not normalized:
+                continue
+            contexts.setdefault(label, []).append(
+                _context_for_gene(fusion, normalized, result=result, error=error)
+            )
+    return contexts
+
+
 def _context_dicts(contexts: list[FusionCurationContext]) -> list[dict]:
     return [asdict(context) for context in contexts]
 
@@ -372,17 +395,45 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
     return list(dict.fromkeys(queries))
 
 
-def retrieve_pubmed_records(
-    gene: str,
+def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
+    fusion_hyphen = fusion.replace("::", "-")
+    genes = [part.strip() for part in fusion.replace("--", "::").split("::") if part.strip()]
+    five_gene = fusion_contexts[0].gene if fusion_contexts and fusion_contexts[0].side == "five_prime" else None
+    three_gene = fusion_contexts[0].partner_gene if five_gene else None
+    if not five_gene and len(genes) == 2:
+        five_gene, three_gene = genes
+    if not three_gene and fusion_contexts:
+        first = fusion_contexts[0]
+        five_gene = first.gene if first.side == "five_prime" else first.partner_gene
+        three_gene = first.partner_gene if first.side == "five_prime" else first.gene
+
+    queries = [
+        f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma OR sarcoma OR neoplasm)',
+    ]
+    if five_gene and three_gene:
+        queries.extend([
+            f'"{five_gene}" AND "{three_gene}" AND fusion',
+            f'"{five_gene}" AND "{three_gene}" AND (oncogenic OR kinase OR inhibitor OR response)',
+        ])
+    kinase_genes = {
+        context.kinase_gene
+        for context in fusion_contexts
+        if context.kinase_gene
+    }
+    for kinase_gene in sorted(kinase_genes):
+        queries.append(f'"{fusion_hyphen}" AND "{kinase_gene}" AND "kinase domain"')
+    return list(dict.fromkeys(queries))
+
+
+def retrieve_pubmed_records_for_queries(
+    subject: str,
+    queries: list[str],
     *,
     ncbi_api_key: str = "",
     ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
-    fusion_contexts: Optional[list[FusionCurationContext]] = None,
 ) -> list[PubMedRecord]:
-    fusion_contexts = fusion_contexts or []
     ncbi_client = ncbi_client or NcbiClient(api_key=ncbi_api_key)
-    queries = _pubmed_queries(gene, fusion_contexts)
     pmids = []
     seen_pmids = set()
     for query in queries:
@@ -426,6 +477,24 @@ def retrieve_pubmed_records(
     return records
 
 
+def retrieve_pubmed_records(
+    gene: str,
+    *,
+    ncbi_api_key: str = "",
+    ncbi_client: Optional[NcbiClient] = None,
+    max_results: int = 8,
+    fusion_contexts: Optional[list[FusionCurationContext]] = None,
+) -> list[PubMedRecord]:
+    fusion_contexts = fusion_contexts or []
+    return retrieve_pubmed_records_for_queries(
+        gene,
+        _pubmed_queries(gene, fusion_contexts),
+        ncbi_api_key=ncbi_api_key,
+        ncbi_client=ncbi_client,
+        max_results=max_results,
+    )
+
+
 def _no_pubmed_evidence_result(
     gene: str,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
@@ -434,6 +503,22 @@ def _no_pubmed_evidence_result(
         "gene": gene,
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this gene.",
+        "supporting_pmids": [],
+        "retrieved_pmids": [],
+        "fusion_contexts": _context_dicts(fusion_contexts or []),
+        "insufficient_evidence": True,
+    }
+
+
+def _no_fusion_pubmed_evidence_result(
+    fusion: str,
+    fusion_contexts: Optional[list[FusionCurationContext]] = None,
+) -> dict:
+    return {
+        "fusion": fusion,
+        "fusion_literature_identified": False,
+        "cancer_associated": None,
+        "rationale": "No PubMed abstracts were retrieved for this exact fusion.",
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "fusion_contexts": _context_dicts(fusion_contexts or []),
@@ -584,9 +669,111 @@ junction, retained/lost domains, or kinase-domain retention.
     return payload
 
 
+def curate_fusion(
+    fusion: str,
+    *,
+    anthropic_api_key: str,
+    ncbi_api_key: str = "",
+    ncbi_client: Optional[NcbiClient] = None,
+    model: str = DEFAULT_CURATION_MODEL,
+    max_results: int = 8,
+    abstract_chars: int = 1200,
+    fusion_contexts: Optional[list[FusionCurationContext]] = None,
+) -> dict:
+    if not anthropic_api_key:
+        raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
+
+    fusion_contexts = fusion_contexts or []
+    records = retrieve_pubmed_records_for_queries(
+        fusion,
+        _fusion_pubmed_queries(fusion, fusion_contexts),
+        ncbi_api_key=ncbi_api_key,
+        ncbi_client=ncbi_client,
+        max_results=max_results,
+    )
+    if not records:
+        return _no_fusion_pubmed_evidence_result(fusion, fusion_contexts)
+
+    context = "\n\n".join(
+        f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
+        for record in records
+    )
+    prompt = f"""\
+Fusion: {fusion}
+
+Genome Nexus fusion-position context:
+{_format_fusion_contexts_for_prompt(fusion_contexts)}
+
+PubMed context:
+{context}
+
+Return one JSON object with:
+- fusion
+- fusion_literature_identified: true/false/null
+- cancer_associated: true/false/null
+- rationale: concise curator-facing scan text grounded only in the PubMed context.
+  Write 1-2 short sentences, ideally 45-90 words total. State whether the exact
+  fusion is described in the literature, the strongest cancer/mechanistic context,
+  and one caveat if needed.
+- supporting_pmids: up to 4 PMIDs from the context
+- retrieved_pmids: all PMIDs provided in the context
+- fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
+- insufficient_evidence: true when the exact fusion literature context is too sparse
+
+Prioritize evidence about the exact fusion over separate evidence about either
+partner gene. Do not infer transcript, breakpoint, domain-retention, or
+kinase-domain status beyond the Genome Nexus context.
+"""
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=anthropic_api_key)
+    response = client.messages.create(
+        model=model,
+        max_tokens=1024,
+        system=(
+            "You are a cancer genomics literature curator. "
+            "Use only the provided PubMed context. Return valid JSON only. "
+            "Keep rationale text concise and optimized for fast curator review."
+        ),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(
+        block.text for block in response.content
+        if getattr(block, "type", None) == "text"
+    ).strip()
+    try:
+        payload = json.loads(_strip_markdown_json_fence(text))
+    except json.JSONDecodeError:
+        payload = {
+            "fusion": fusion,
+            "fusion_literature_identified": None,
+            "cancer_associated": None,
+            "rationale": text,
+            "supporting_pmids": [],
+            "retrieved_pmids": [record.pmid for record in records],
+            "fusion_contexts": _context_dicts(fusion_contexts),
+            "insufficient_evidence": True,
+        }
+    payload.setdefault("fusion", fusion)
+    payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    return payload
+
+
+def _fusion_curation_is_sufficient(result: dict) -> bool:
+    if result.get("error") or result.get("insufficient_evidence"):
+        return False
+    if result.get("fusion_literature_identified") is False:
+        return False
+    return bool(result.get("supporting_pmids") or result.get("rationale"))
+
+
 def curate_fusion_genes(
     fusions: Iterable[object],
     annotation_results: Optional[Iterable[dict]] = None,
+    *,
+    force_gene_curation: bool = False,
 ) -> dict:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_api_key:
@@ -594,14 +781,62 @@ def curate_fusion_genes(
 
     fusions = list(fusions)
     contexts_by_gene = fusion_contexts_by_gene(fusions, annotation_results)
-    genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
+    contexts_by_fusion = fusion_contexts_by_fusion(fusions, annotation_results)
     ncbi_api_key = os.environ.get("NCBI_API_KEY", "")
     ncbi_client = NcbiClient(api_key=ncbi_api_key)
     model = os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL)
     max_results = max(1, int(os.environ.get("FUSION_GENE_CURATION_MAX_RESULTS", "8")))
     abstract_chars = max(200, int(os.environ.get("FUSION_GENE_CURATION_ABSTRACT_CHARS", "1200")))
     max_workers = max(1, int(os.environ.get("FUSION_GENE_CURATION_WORKERS", "3")))
+    fusion_results = []
     results = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        fusion_futures = {
+            executor.submit(
+                curate_fusion,
+                fusion,
+                anthropic_api_key=anthropic_api_key,
+                ncbi_api_key=ncbi_api_key,
+                ncbi_client=ncbi_client,
+                model=model,
+                max_results=max_results,
+                abstract_chars=abstract_chars,
+                fusion_contexts=contexts,
+            ): fusion
+            for fusion, contexts in contexts_by_fusion.items()
+        }
+        for future in as_completed(fusion_futures):
+            fusion = fusion_futures[future]
+            try:
+                fusion_results.append(future.result())
+            except Exception as exc:
+                fusion_results.append({
+                    "fusion": fusion,
+                    "error": str(exc),
+                    "insufficient_evidence": True,
+                    "supporting_pmids": [],
+                    "retrieved_pmids": [],
+                    "fusion_contexts": _context_dicts(contexts_by_fusion.get(fusion, [])),
+                })
+
+    sufficient_fusions = {
+        result.get("fusion")
+        for result in fusion_results
+        if _fusion_curation_is_sufficient(result)
+    }
+    genes = []
+    if force_gene_curation:
+        genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
+    else:
+        seen_genes = set()
+        for fusion, contexts in contexts_by_fusion.items():
+            if fusion in sufficient_fusions:
+                continue
+            for context in contexts:
+                if context.gene not in seen_genes:
+                    seen_genes.add(context.gene)
+                    genes.append(context.gene)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
@@ -633,4 +868,5 @@ def curate_fusion_genes(
                 })
 
     results.sort(key=lambda item: item.get("gene", ""))
-    return {"genes": results}
+    fusion_results.sort(key=lambda item: item.get("fusion", ""))
+    return {"fusions": fusion_results, "genes": results}

@@ -437,22 +437,95 @@ def test_curate_fusion_genes_passes_token_controls(monkeypatch):
         seen[gene] = kwargs
         return {"gene": gene, "insufficient_evidence": True}
 
+    def fake_curate_fusion(fusion, **kwargs):
+        seen[fusion] = kwargs
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": False,
+            "insufficient_evidence": True,
+        }
+
     monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
     monkeypatch.setenv("NCBI_API_KEY", "ncbi")
     monkeypatch.setenv("FUSION_GENE_CURATION_MODEL", "curation-model")
     monkeypatch.setenv("FUSION_GENE_CURATION_MAX_RESULTS", "3")
     monkeypatch.setenv("FUSION_GENE_CURATION_ABSTRACT_CHARS", "600")
     monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
     monkeypatch.setattr(gene_curation, "curate_gene", fake_curate_gene)
 
     result = gene_curation.curate_fusion_genes([Fusion()])
 
+    assert result["fusions"] == [
+        {"fusion": "EML4::ALK", "fusion_literature_identified": False, "insufficient_evidence": True}
+    ]
     assert result["genes"] == [
         {"gene": "ALK", "insufficient_evidence": True},
         {"gene": "EML4", "insufficient_evidence": True},
     ]
+    assert seen["EML4::ALK"]["model"] == "curation-model"
     assert seen["ALK"]["model"] == "curation-model"
     assert seen["ALK"]["ncbi_api_key"] == "ncbi"
     assert seen["ALK"]["max_results"] == 3
     assert seen["ALK"]["abstract_chars"] == 600
     assert seen["ALK"]["fusion_contexts"][0].fusion == "EML4::ALK"
+
+
+def test_curate_fusion_genes_skips_gene_calls_when_fusion_is_sufficient(monkeypatch):
+    class Fusion:
+        five_gene = "LMNA"
+        three_gene = "NTRK1"
+
+    def fake_curate_fusion(fusion, **kwargs):
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": True,
+            "cancer_associated": True,
+            "rationale": "LMNA::NTRK1 is described in cancer literature.",
+            "supporting_pmids": ["1"],
+            "retrieved_pmids": ["1"],
+            "insufficient_evidence": False,
+        }
+
+    def fake_curate_gene(gene, **kwargs):
+        raise AssertionError(f"gene curation should be skipped for {gene}")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
+    monkeypatch.setattr(gene_curation, "curate_gene", fake_curate_gene)
+
+    result = gene_curation.curate_fusion_genes([Fusion()])
+
+    assert result["fusions"][0]["fusion"] == "LMNA::NTRK1"
+    assert result["genes"] == []
+
+
+def test_curate_fusion_genes_force_gene_calls_when_requested(monkeypatch):
+    class Fusion:
+        five_gene = "LMNA"
+        three_gene = "NTRK1"
+
+    called_genes = []
+
+    def fake_curate_fusion(fusion, **kwargs):
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": True,
+            "supporting_pmids": ["1"],
+            "insufficient_evidence": False,
+        }
+
+    def fake_curate_gene(gene, **kwargs):
+        called_genes.append(gene)
+        return {"gene": gene, "insufficient_evidence": True}
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
+    monkeypatch.setattr(gene_curation, "curate_gene", fake_curate_gene)
+
+    result = gene_curation.curate_fusion_genes([Fusion()], force_gene_curation=True)
+
+    assert called_genes == ["LMNA", "NTRK1"]
+    assert [item["gene"] for item in result["genes"]] == ["LMNA", "NTRK1"]

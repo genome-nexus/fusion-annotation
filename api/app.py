@@ -118,6 +118,10 @@ class BatchAnnotateRequest(BaseModel):
         min_length=1,
         description="Fusion annotations to run in one request.",
     )
+    force_gene_curation: bool = Field(
+        False,
+        description="When true, run per-gene literature curation even if exact fusion literature is sufficient.",
+    )
 
 
 class BatchAnnotateItemResult(BaseModel):
@@ -131,6 +135,7 @@ class BatchAnnotateResponse(BaseModel):
 
 
 class GeneCurationResponse(BaseModel):
+    fusions: list[dict] = Field(default_factory=list)
     genes: list[dict]
 
 
@@ -303,7 +308,11 @@ def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # no
             _batch_result_to_curation_context(item)
             for item in _annotate_batch_items(params.fusions)
         ]
-        return curate_fusion_genes(params.fusions, annotation_results=annotation_results)
+        return curate_fusion_genes(
+            params.fusions,
+            annotation_results=annotation_results,
+            force_gene_curation=params.force_gene_curation,
+        )
     except GeneCurationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

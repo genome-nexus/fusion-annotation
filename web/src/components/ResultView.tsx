@@ -3,6 +3,7 @@ import type {
   AnnotationResult,
   ApiError,
   FusionKnowledge,
+  GeneCurationFusionResult,
   GeneCurationGeneResult,
   GeneFusionCurationContext,
 } from "../lib/types";
@@ -15,11 +16,13 @@ import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
 interface Props {
   result: AnnotationResult;
   permalink: string;
+  fusionCurationResults?: GeneCurationFusionResult[] | null;
   geneCurationResults?: GeneCurationGeneResult[] | null;
   geneCurationLoading?: boolean;
   geneCurationEnabled?: boolean;
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
+  onForceGeneCuration?: () => void;
   onExportGeneCurationCsv?: () => void;
 }
 
@@ -114,7 +117,7 @@ function ClinicalEvidence({ knowledge }: { knowledge: FusionKnowledge }) {
   );
 }
 
-function curationPriority(item: GeneCurationGeneResult) {
+function curationPriority(item: GeneCurationGeneResult | GeneCurationFusionResult) {
   if (item.insufficient_evidence) {
     return {
       label: "Low priority",
@@ -143,7 +146,7 @@ function curationPriority(item: GeneCurationGeneResult) {
   };
 }
 
-function curationEvidenceSignal(item: GeneCurationGeneResult) {
+function curationEvidenceSignal(item: GeneCurationGeneResult | GeneCurationFusionResult) {
   if (item.insufficient_evidence) {
     return {
       label: "Sparse evidence",
@@ -172,7 +175,7 @@ function curationEvidenceSignal(item: GeneCurationGeneResult) {
   };
 }
 
-function curationBadges(item: GeneCurationGeneResult) {
+function curationBadges(item: GeneCurationGeneResult | GeneCurationFusionResult) {
   return [curationPriority(item), curationEvidenceSignal(item)];
 }
 
@@ -194,7 +197,7 @@ function pubmedUrl(pmid: string) {
   return `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
 }
 
-function confidenceLabel(item?: GeneCurationGeneResult) {
+function confidenceLabel(item?: GeneCurationGeneResult | GeneCurationFusionResult) {
   if (!item || item.insufficient_evidence) return "Low";
   if (item.cancer_associated === true) return "Higher";
   if (item.cancer_associated === false) return "Lower";
@@ -260,19 +263,23 @@ function renderFusionContext(context: GeneFusionCurationContext) {
 
 function GeneInformationSection({
   result,
+  fusionCurationResults,
   geneCurationResults,
   geneCurationLoading = false,
   geneCurationEnabled = false,
   geneCurationError = null,
   onCurateGenes,
+  onForceGeneCuration,
   onExportGeneCurationCsv,
 }: {
   result: AnnotationResult;
+  fusionCurationResults?: GeneCurationFusionResult[] | null;
   geneCurationResults?: GeneCurationGeneResult[] | null;
   geneCurationLoading?: boolean;
   geneCurationEnabled?: boolean;
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
+  onForceGeneCuration?: () => void;
   onExportGeneCurationCsv?: () => void;
 }) {
   const genes = [
@@ -281,6 +288,15 @@ function GeneInformationSection({
   ].filter((gene, index, values) => values.indexOf(gene) === index);
   const byGene = new Map(
     (geneCurationResults || []).map((item) => [item.gene.toUpperCase(), item]),
+  );
+  const fusionItem = (fusionCurationResults || []).find(
+    (item) => item.fusion === result.interface.categorical_key,
+  );
+  const fusionSufficient = Boolean(
+    fusionItem
+      && !fusionItem.error
+      && !fusionItem.insufficient_evidence
+      && fusionItem.fusion_literature_identified !== false,
   );
 
   return (
@@ -294,9 +310,9 @@ function GeneInformationSection({
           </p>
         </div>
         <div className="gene-info-actions">
-          {geneCurationResults?.length ? (
+          {geneCurationResults?.length || fusionCurationResults?.length ? (
             <button type="button" className="secondary-button" onClick={onExportGeneCurationCsv}>
-              Export gene CSV
+              Export curation CSV
             </button>
           ) : null}
           {onCurateGenes && (
@@ -306,7 +322,7 @@ function GeneInformationSection({
               disabled={!geneCurationEnabled || geneCurationLoading}
               onClick={onCurateGenes}
             >
-              {geneCurationLoading ? "Loading gene info..." : "Get gene info"}
+              {geneCurationLoading ? "Loading literature..." : "Get literature info"}
             </button>
           )}
         </div>
@@ -324,6 +340,91 @@ function GeneInformationSection({
       )}
 
       <div className="gene-info-list">
+        <details className="gene-info-item" open={Boolean(fusionItem)}>
+          <summary>
+            <span className="gene-info-symbol">{result.interface.categorical_key}</span>
+            <span className="gene-info-summary">
+              {fusionItem
+                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · confidence ${confidenceLabel(fusionItem)}`
+                : "No fusion-specific literature curation loaded"}
+            </span>
+          </summary>
+          {fusionItem ? (
+            fusionItem.error ? (
+              <div className="error-box">{fusionItem.error}</div>
+            ) : (
+              <div className="gene-info-body">
+                <div className="curation-badges" aria-label={`${fusionItem.fusion} review signals`}>
+                  {curationBadges(fusionItem).map((badge) => (
+                    <span className={`status-chip ${badge.tone}`} key={badge.label} title={badge.title}>
+                      {badge.label}
+                    </span>
+                  ))}
+                </div>
+                <dl className="gene-curation-fields">
+                  <dt>Fusion in literature</dt>
+                  <dd>
+                    {fusionItem.fusion_literature_identified == null
+                      ? "Unknown"
+                      : fusionItem.fusion_literature_identified ? "Yes" : "No"}
+                  </dd>
+                  <dt>Known driver signal</dt>
+                  <dd>
+                    {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
+                  </dd>
+                  <dt>Confidence</dt>
+                  <dd>{confidenceLabel(fusionItem)}</dd>
+                  <dt>Rationale</dt>
+                  <dd>{fusionItem.rationale || "No rationale returned."}</dd>
+                </dl>
+                {fusionItem.fusion_contexts && fusionItem.fusion_contexts.length > 0 && (
+                  <div className="fusion-curation-contexts">
+                    {fusionItem.fusion_contexts.map(renderFusionContext)}
+                  </div>
+                )}
+                <div className="pmid-row">
+                  <strong>Supporting PMIDs</strong>
+                  <span>
+                    {fusionItem.supporting_pmids?.length
+                      ? fusionItem.supporting_pmids.map((pmid, index) => (
+                          <span key={pmid}>
+                            {index > 0 && ", "}
+                            <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">
+                              {pmid}
+                            </a>
+                          </span>
+                        ))
+                      : "None selected"}
+                  </span>
+                </div>
+                <div className="pmid-row">
+                  <strong>Retrieved PMIDs</strong>
+                  <span>{fusionItem.retrieved_pmids?.join(", ") || "None retrieved"}</span>
+                </div>
+              </div>
+            )
+          ) : (
+            <p className="gene-info-empty">
+              Run literature info to check whether this exact fusion is described in PubMed.
+            </p>
+          )}
+        </details>
+
+        {fusionSufficient && !geneCurationResults?.length && onForceGeneCuration && (
+          <div className="notice-box gene-info-skip">
+            Fusion-specific literature was sufficient, so per-gene retrieval was skipped to reduce PubMed and LLM
+            usage.
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={geneCurationLoading}
+              onClick={onForceGeneCuration}
+            >
+              Get per-gene info
+            </button>
+          </div>
+        )}
+
         {genes.map((gene) => {
           const item = byGene.get(gene.toUpperCase());
           const contexts = item?.fusion_contexts?.filter(
@@ -389,7 +490,9 @@ function GeneInformationSection({
                 )
               ) : (
                 <p className="gene-info-empty">
-                  Run gene information to retrieve literature-backed AGCG context for {gene}.
+                  {fusionSufficient
+                    ? `Per-gene retrieval for ${gene} was skipped because fusion-specific literature was sufficient.`
+                    : `Run literature info to retrieve gene-level AGCG context for ${gene}.`}
                 </p>
               )}
             </details>
@@ -403,11 +506,13 @@ function GeneInformationSection({
 export function ResultView({
   result,
   permalink,
+  fusionCurationResults,
   geneCurationResults,
   geneCurationLoading,
   geneCurationEnabled,
   geneCurationError,
   onCurateGenes,
+  onForceGeneCuration,
   onExportGeneCurationCsv,
 }: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
@@ -563,11 +668,13 @@ export function ResultView({
 
       <GeneInformationSection
         result={result}
+        fusionCurationResults={fusionCurationResults}
         geneCurationResults={geneCurationResults}
         geneCurationLoading={geneCurationLoading}
         geneCurationEnabled={geneCurationEnabled}
         geneCurationError={geneCurationError}
         onCurateGenes={onCurateGenes}
+        onForceGeneCuration={onForceGeneCuration}
         onExportGeneCurationCsv={onExportGeneCurationCsv}
       />
 
