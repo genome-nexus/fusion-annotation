@@ -253,6 +253,86 @@ def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):
     assert result["fusion_contexts"][0]["fusion"] == "EML4::ALK"
 
 
+def test_fusion_context_marks_gene_pair_only_when_annotation_unavailable():
+    class Fusion:
+        five_gene = "CD74"
+        three_gene = "ROS1"
+
+    contexts = gene_curation.fusion_contexts_by_gene(
+        [Fusion()],
+        annotation_results=[{"input": Fusion(), "error": "no breakpoint given"}],
+    )
+
+    ros1 = contexts["ROS1"][0]
+    assert ros1.fusion == "CD74::ROS1"
+    assert ros1.breakpoint_context_available is False
+    assert ros1.fusion_specificity == "gene_pair_only"
+    assert ros1.kinase_domain_status is None
+    assert "Exact Genome Nexus breakpoint context was unavailable" in ros1.limitations[0]
+
+
+def test_curate_gene_prompt_warns_against_position_claims_for_gene_pair_only(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="1",
+                title="CD74 ROS1 fusion in lung cancer",
+                abstract="CD74 ROS1 fusions are reported in lung cancer.",
+            )
+        ],
+    )
+    seen = {}
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            seen["prompt"] = kwargs["messages"][0]["content"]
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ROS1","cancer_associated":true,'
+                            '"rationale":"ROS1 fusions are reported.",'
+                            '"supporting_pmids":["1"],'
+                            '"retrieved_pmids":["1"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    context = FusionCurationContext(
+        gene="ROS1",
+        fusion="CD74::ROS1",
+        side="three_prime",
+        partner_gene="CD74",
+        limitations=("Exact Genome Nexus breakpoint context was unavailable.",),
+    )
+
+    result = gene_curation.curate_gene(
+        "ROS1",
+        anthropic_api_key="configured",
+        fusion_contexts=[context],
+    )
+
+    assert "Specificity: gene_pair_only" in seen["prompt"]
+    assert "avoid claims about the exact exon" in seen["prompt"]
+    assert result["fusion_contexts"][0]["breakpoint_context_available"] is False
+
+
 def test_curate_fusion_genes_passes_token_controls(monkeypatch):
     class Fusion:
         five_gene = "EML4"

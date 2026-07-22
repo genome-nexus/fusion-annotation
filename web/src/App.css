@@ -356,6 +356,17 @@ header .tagline {
   font-size: 0.82rem;
 }
 
+.fusion-curation-limitations {
+  margin: 9px 0 0;
+  padding-left: 18px;
+  color: #5f4b00;
+  font-size: 0.82rem;
+}
+
+.fusion-curation-limitations li + li {
+  margin-top: 4px;
+}
+
 .status-chip {
   border-radius: 999px;
   background: #d3f9d8;

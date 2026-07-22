@@ -252,6 +252,41 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
+def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
+    seen = {}
+
+    def fake_curate_fusion_genes(fusions, annotation_results=None):
+        seen["fusions"] = fusions
+        seen["annotation_results"] = annotation_results
+        return {
+            "genes": [
+                {
+                    "gene": "ROS1",
+                    "cancer_associated": None,
+                    "rationale": "Gene-pair-level curation only.",
+                    "supporting_pmids": [],
+                    "retrieved_pmids": [],
+                    "fusion_contexts": [],
+                    "insufficient_evidence": True,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(api_app, "curate_fusion_genes", fake_curate_fusion_genes)
+
+    r = client.post("/api/gene-curation", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK"}
+        ]
+    })
+
+    assert r.status_code == 200
+    assert seen["fusions"][0].five_gene == "EML4"
+    assert "result" not in seen["annotation_results"][0]
+    assert "no breakpoint given" in seen["annotation_results"][0]["error"]
+    assert r.json()["genes"][0]["gene"] == "ROS1"
+
+
 def test_gene_curation_ui_uses_reviewer_facing_badges():
     root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
     app_tsx = open(os.path.join(root, "web", "src", "App.tsx")).read()
@@ -261,6 +296,8 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "Review priority" in app_tsx
     assert "without changing backend schema or tier logic" in app_tsx
     assert "Server-side curation uses Genome Nexus fusion structure" in app_tsx
+    assert "breakpoint context unavailable" in app_tsx
+    assert "fusion_specificity" in app_tsx
     assert "fusion-curation-context" in app_tsx
     assert "Export curation CSV" in app_tsx
     assert "fusion_gene_curation.csv" in app_tsx

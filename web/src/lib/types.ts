@@ -138,6 +138,8 @@ export interface GeneFusionCurationContext {
   fusion: string;
   side: "five_prime" | "three_prime";
   partner_gene: string;
+  breakpoint_context_available?: boolean;
+  fusion_specificity?: "gene_pair_only" | "exon_level" | "protein_domain_level";
   five_transcript?: string | null;
   three_transcript?: string | null;
   five_exon?: string | null;
@@ -152,6 +154,7 @@ export interface GeneFusionCurationContext {
   kinase_gene?: string | null;
   kinase_gene_side?: "five_prime" | "three_prime" | null;
   kinase_domain_status?: "retained" | "lost" | "disrupted" | "unknown" | null;
+  limitations?: string[];
   annotation_error?: string | null;
 }
 
@@ -183,7 +186,7 @@ export interface AnnotateParams {
   three_transcript?: string;
   genome_build: string;
   variant_type?: string;
-  input_mode?: "exon" | "genomic";
+  input_mode?: "exon" | "genomic" | "gene_pair";
 }
 
 export interface ApiError {

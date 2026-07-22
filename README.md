@@ -399,6 +399,21 @@ components sit on top of the same core engine:
   query string, so the address bar doubles as the permalink. Deployed as a
   static site on **GitHub Pages** — no server, no container, $0 hosting cost.
 
+The server-side curation endpoint accepts the same batch fusion rows as
+annotation, but it
+does not require every row to have exon or genomic breakpoints. When Genome
+Nexus can resolve the fusion structure, curation includes transcript, exon,
+protein-breakpoint, retained/lost domain, and kinase-domain context. When only
+the gene pair is known, curation still runs against PubMed and the output marks
+`fusion_specificity=gene_pair_only`, `breakpoint_context_available=false`, and a
+limitation explaining that exact exon/protein claims should not be made. The web
+batch input supports both forms:
+
+```text
+EML4::ALK,13,20
+CD74::ROS1
+```
+
 Run both locally:
 
 ```bash

@@ -32,6 +32,8 @@ class FusionCurationContext:
     fusion: str
     side: str
     partner_gene: str
+    breakpoint_context_available: bool = False
+    fusion_specificity: str = "gene_pair_only"
     five_transcript: Optional[str] = None
     three_transcript: Optional[str] = None
     five_exon: Optional[str] = None
@@ -46,6 +48,7 @@ class FusionCurationContext:
     kinase_gene: Optional[str] = None
     kinase_gene_side: Optional[str] = None
     kinase_domain_status: Optional[str] = None
+    limitations: tuple[str, ...] = ()
     annotation_error: Optional[str] = None
 
 
@@ -166,6 +169,45 @@ def _kinase_signal(
     return gene or None, side, status
 
 
+def _fusion_specificity(result: Optional[dict]) -> str:
+    if not result:
+        return "gene_pair_only"
+
+    iface = result.get("interface", {})
+    if (
+        iface.get("five_last_aa") is not None
+        or iface.get("three_first_aa") is not None
+        or iface.get("domains")
+    ):
+        return "protein_domain_level"
+
+    resolved = result.get("resolved", {})
+    if resolved.get("five") or resolved.get("three"):
+        return "exon_level"
+
+    return "gene_pair_only"
+
+
+def _context_limitations(
+    *,
+    result: Optional[dict],
+    error: Optional[str],
+) -> tuple[str, ...]:
+    if result:
+        return ()
+
+    limitations = [
+        (
+            "Exact Genome Nexus breakpoint context was unavailable, so this "
+            "curation is based on the reported fusion gene pair and PubMed "
+            "literature rather than the precise exon/protein breakpoint."
+        )
+    ]
+    if error:
+        limitations.append(f"Genome Nexus annotation did not complete: {error}")
+    return tuple(limitations)
+
+
 def _context_for_gene(
     fusion: object,
     gene: str,
@@ -182,11 +224,14 @@ def _context_for_gene(
     three = resolved.get("three") or {}
     iface = result.get("interface", {}) if result else {}
     kinase_gene, kinase_side, kinase_status = _kinase_signal(result, five_gene, three_gene)
+    breakpoint_context_available = result is not None
     return FusionCurationContext(
         gene=gene,
         fusion=_fusion_label(fusion),
         side=side,
         partner_gene=partner_gene,
+        breakpoint_context_available=breakpoint_context_available,
+        fusion_specificity=_fusion_specificity(result),
         five_transcript=_optional_str(five.get("transcript")) or _optional_str(_fusion_value(fusion, "five_transcript")),
         three_transcript=_optional_str(three.get("transcript")) or _optional_str(_fusion_value(fusion, "three_transcript")),
         five_exon=_resolved_exon(five, _input_exon(fusion, "five_exon")),
@@ -201,6 +246,7 @@ def _context_for_gene(
         kinase_gene=kinase_gene,
         kinase_gene_side=kinase_side,
         kinase_domain_status=kinase_status,
+        limitations=_context_limitations(result=result, error=error),
         annotation_error=error,
     )
 
@@ -345,6 +391,10 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
     for context in contexts:
         lines.extend([
             f"- Fusion: {context.fusion}",
+            (
+                f"  Specificity: {context.fusion_specificity}; "
+                f"Genome Nexus breakpoint context available: {context.breakpoint_context_available}"
+            ),
             f"  Gene side: {context.side}; partner: {context.partner_gene}",
             (
                 "  5' partner: "
@@ -373,6 +423,8 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
                 f"domain_status={context.kinase_domain_status or 'unknown'}"
             ),
         ])
+        if context.limitations:
+            lines.append(f"  Limitations: {'; '.join(context.limitations)}")
         if context.annotation_error:
             lines.append(f"  Fusion annotation limitation: {context.annotation_error}")
     return "\n".join(lines)
@@ -429,6 +481,9 @@ Return one JSON object with:
 Do not infer transcript, breakpoint, domain-retention, or kinase-domain status
 beyond the Genome Nexus context. Do not mark a result cancer-associated solely
 because a kinase domain is retained; supporting PubMed evidence is still required.
+When fusion_specificity is gene_pair_only, limit conclusions to gene-pair-level
+literature evidence and explicitly avoid claims about the exact exon, protein
+junction, retained/lost domains, or kinase-domain retention.
 """
 
     import anthropic

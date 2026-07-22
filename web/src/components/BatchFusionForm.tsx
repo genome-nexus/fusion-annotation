@@ -21,8 +21,16 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
   if (!fiveGene || !threeGene) {
     throw new Error(`Could not parse fusion partners from line: ${line}`);
   }
+  if (!fiveExon && !threeExon) {
+    return {
+      five_gene: fiveGene,
+      three_gene: threeGene,
+      genome_build: genomeBuild,
+      input_mode: "gene_pair",
+    };
+  }
   if (!fiveExon || !threeExon) {
-    throw new Error(`Batch exon mode requires five_exon and three_exon: ${line}`);
+    throw new Error(`Provide both exon numbers, or leave both blank for gene-pair-only curation: ${line}`);
   }
   if (!/^\d+$/.test(fiveExon) || !/^\d+$/.test(threeExon)) {
     throw new Error(`Exon numbers must be positive integers: ${line}`);
@@ -45,7 +53,7 @@ export function BatchFusionForm({
   curationLoading = false,
   curationEnabled = false,
 }: Props) {
-  const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2");
+  const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2\nCD74::ROS1");
   const [parseError, setParseError] = useState<string | null>(null);
 
   function parseInput(): AnnotateParams[] {
@@ -83,9 +91,9 @@ export function BatchFusionForm({
       <div className="batch-form-header">
         <div>
           <h2>Batch annotation</h2>
-          <p>Run multiple exon-defined fusions against the same Genome Nexus workflow.</p>
+          <p>Run exact breakpoint rows when available; gene-pair-only rows can still be curated.</p>
         </div>
-        <span className="batch-format">GENE1::GENE2, five_exon, three_exon</span>
+        <span className="batch-format">GENE1::GENE2[, five_exon, three_exon]</span>
       </div>
       <textarea
         value={text}

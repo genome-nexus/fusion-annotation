@@ -108,6 +108,12 @@ function formatDomainList(domains?: string[]) {
   return domains && domains.length ? domains.join(", ") : "none";
 }
 
+function formatFusionSpecificity(value?: GeneFusionCurationContext["fusion_specificity"]) {
+  if (value === "protein_domain_level") return "Protein/domain-level";
+  if (value === "exon_level") return "Exon-level";
+  return "Gene-pair only";
+}
+
 function renderFusionContext(context: GeneFusionCurationContext) {
   const breakpoint = context.side === "five_prime"
     ? {
@@ -129,6 +135,11 @@ function renderFusionContext(context: GeneFusionCurationContext) {
         <span>{formatContextSide(context)}</span>
       </div>
       <dl>
+        <dt>Scope</dt>
+        <dd>
+          {formatFusionSpecificity(context.fusion_specificity)}
+          {context.breakpoint_context_available ? "" : " · breakpoint context unavailable"}
+        </dd>
         <dt>Partner</dt>
         <dd>{context.partner_gene}</dd>
         <dt>Breakpoint</dt>
@@ -146,6 +157,13 @@ function renderFusionContext(context: GeneFusionCurationContext) {
           {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
         </dd>
       </dl>
+      {context.limitations && context.limitations.length > 0 && (
+        <ul className="fusion-curation-limitations">
+          {context.limitations.map((limitation) => (
+            <li key={limitation}>{limitation}</li>
+          ))}
+        </ul>
+      )}
       {context.annotation_error && (
         <p className="fusion-curation-context-error">{context.annotation_error}</p>
       )}
@@ -158,6 +176,8 @@ const CURATION_CSV_HEADERS = [
   "fusion",
   "gene_side",
   "partner_gene",
+  "breakpoint_context_available",
+  "fusion_specificity",
   "five_transcript",
   "three_transcript",
   "five_exon",
@@ -171,6 +191,7 @@ const CURATION_CSV_HEADERS = [
   "kinase_gene",
   "kinase_gene_side",
   "kinase_domain_status",
+  "limitations",
   "cancer_associated",
   "rationale",
   "supporting_pmids",
@@ -197,6 +218,10 @@ function curationCsvRows(items: GeneCurationGeneResult[]) {
         context?.fusion,
         context?.side,
         context?.partner_gene,
+        context?.breakpoint_context_available == null
+          ? ""
+          : context.breakpoint_context_available ? "TRUE" : "FALSE",
+        context?.fusion_specificity,
         context?.five_transcript,
         context?.three_transcript,
         context?.five_exon,
@@ -210,6 +235,7 @@ function curationCsvRows(items: GeneCurationGeneResult[]) {
         context?.kinase_gene,
         context?.kinase_gene_side,
         context?.kinase_domain_status,
+        context?.limitations,
         item.cancer_associated == null ? "" : item.cancer_associated ? "TRUE" : "FALSE",
         item.rationale,
         item.supporting_pmids,
