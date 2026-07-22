@@ -721,6 +721,110 @@ def _looks_like_json_blob(value: object) -> bool:
     )
 
 
+def _jsonish_string_field(text: str, key: str) -> Optional[str]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    quote = text.find('"', colon + 1)
+    if quote == -1:
+        return None
+
+    escaped = False
+    for index in range(quote + 1, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            try:
+                value = json.loads(text[quote:index + 1])
+            except json.JSONDecodeError:
+                return None
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _jsonish_array_field(text: str, key: str) -> Optional[list]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    bracket = text.find("[", colon + 1)
+    if bracket == -1:
+        return None
+
+    in_string = False
+    escaped = False
+    depth = 0
+    for index, char in enumerate(text[bracket:], start=bracket):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    value = json.loads(text[bracket:index + 1])
+                except json.JSONDecodeError:
+                    return None
+                return value if isinstance(value, list) else None
+    return None
+
+
+def _jsonish_bool_or_null_field(text: str, key: str) -> Optional[bool]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    value = text[colon + 1:].lstrip()
+    if value.startswith("true"):
+        return True
+    if value.startswith("false"):
+        return False
+    return None
+
+
+def _repair_payload_from_jsonish_text(payload: dict, text: str) -> dict:
+    repaired = dict(payload)
+    cleaned = _strip_markdown_json_fence(text)
+    for key in ("gene", "fusion", "rationale"):
+        value = _jsonish_string_field(cleaned, key)
+        if value:
+            repaired[key] = value
+    for key in ("supporting_pmids", "retrieved_pmids"):
+        value = _jsonish_array_field(cleaned, key)
+        if value is not None:
+            repaired[key] = value
+    for key in ("fusion_literature_identified", "cancer_associated", "insufficient_evidence"):
+        value = _jsonish_bool_or_null_field(cleaned, key)
+        if value is not None:
+            repaired[key] = value
+    return repaired
+
+
 def _normal_model_parse_fallback(
     *,
     subject_label: str,
@@ -728,6 +832,7 @@ def _normal_model_parse_fallback(
     records: list[PubMedRecord],
     fusion_contexts: list[FusionCurationContext],
     fusion_result: bool,
+    raw_text: str = "",
 ) -> dict:
     payload = {
         subject_label: subject,
@@ -743,6 +848,8 @@ def _normal_model_parse_fallback(
     }
     if fusion_result:
         payload["fusion_literature_identified"] = None
+    if raw_text:
+        payload = _repair_payload_from_jsonish_text(payload, raw_text)
     return payload
 
 
@@ -753,10 +860,10 @@ def _repair_json_rationale(payload: dict) -> dict:
     try:
         parsed = _extract_json_object(str(rationale))
     except json.JSONDecodeError:
-        payload["rationale"] = (
-            "The curation model returned malformed JSON in the rationale field; "
-            "rerun curation to regenerate this result."
-        )
+        repaired = _repair_payload_from_jsonish_text(payload, str(rationale))
+        if repaired.get("rationale") != rationale and repaired.get("rationale"):
+            return repaired
+        payload["rationale"] = ""
         payload["insufficient_evidence"] = True
         return payload
     repaired = {**payload, **parsed}
@@ -1289,6 +1396,7 @@ junction, retained/lost domains, or kinase-domain retention.
             records=records,
             fusion_contexts=fusion_contexts,
             fusion_result=False,
+            raw_text=text,
         )
     payload = _repair_json_rationale(payload)
     payload.setdefault("gene", gene)
@@ -1395,6 +1503,7 @@ kinase-domain status beyond the Genome Nexus context.
             records=records,
             fusion_contexts=fusion_contexts,
             fusion_result=True,
+            raw_text=text,
         )
     payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
