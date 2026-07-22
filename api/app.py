@@ -197,6 +197,18 @@ def _annotate_batch_items(fusions: list[AnnotateRequest]) -> list[BatchAnnotateI
     ]
 
 
+def _batch_result_to_curation_context(item: BatchAnnotateItemResult) -> dict:
+    context = {"input": item.input}
+    if item.result is not None:
+        if hasattr(item.result, "model_dump"):
+            context["result"] = item.result.model_dump()
+        else:
+            context["result"] = item.result.dict()
+    if item.error is not None:
+        context["error"] = item.error
+    return context
+
+
 def _run_annotation(params: AnnotateRequest) -> dict:
     """Shared handler for GET/POST /api/annotate — builds a provider and calls
     the core engine, translating engine-level errors into HTTP responses."""
@@ -286,28 +298,13 @@ def gene_curation_status() -> dict:
 def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # noqa: ARG001
     """Run server-side literature curation with Genome Nexus fusion context."""
     try:
-        provider = make_provider(
-            species=params.fusions[0].species,
-            assembly=params.fusions[0].genome_build,
-        )
-        annotation_results = []
-        for item in params.fusions:
-            try:
-                if item.species != params.fusions[0].species or item.genome_build != params.fusions[0].genome_build:
-                    provider = make_provider(species=item.species, assembly=item.genome_build)
-                annotation_results.append({"input": item, "result": _annotate_with_provider(provider, item)})
-            except (ValueError, KeyError) as exc:
-                annotation_results.append({"input": item, "error": str(exc)})
-            except requests.exceptions.RequestException as exc:
-                annotation_results.append({
-                    "input": item,
-                    "error": f"upstream annotation source error: {exc}",
-                })
+        annotation_results = [
+            _batch_result_to_curation_context(item)
+            for item in _annotate_batch_items(params.fusions)
+        ]
         return curate_fusion_genes(params.fusions, annotation_results=annotation_results)
     except GeneCurationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except requests.exceptions.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"upstream annotation source error: {exc}") from exc
 
 
 if __name__ == "__main__":

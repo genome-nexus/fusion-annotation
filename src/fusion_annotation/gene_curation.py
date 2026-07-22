@@ -3,27 +3,20 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import hashlib
 import json
-import logging
 import os
-from pathlib import Path
-import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from dataclasses import asdict
-from time import time
 from typing import Any
 from typing import Iterable
 from typing import Optional
-from typing import Protocol
 
 import requests
 
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -58,277 +51,6 @@ class FusionCurationContext:
 
 class GeneCurationUnavailable(RuntimeError):
     """Raised when server-side curation is not configured."""
-
-
-def _cache_enabled() -> bool:
-    return os.environ.get("FUSION_GENE_CURATION_CACHE", "1").lower() not in {"0", "false", "no"}
-
-
-def _cache_dir() -> Path:
-    override = os.environ.get("FUSION_GENE_CURATION_CACHE_DIR")
-    if override:
-        return Path(override)
-    return Path(tempfile.gettempdir()) / "fusion-annotation" / "gene-curation-cache"
-
-
-def _stable_cache_key(payload: dict[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _text_digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _safe_namespace(namespace: str) -> str:
-    return "".join(
-        char if char.isalnum() or char in {"-", "_"} else "_"
-        for char in namespace
-    )
-
-
-class CacheBackend(Protocol):
-    def read(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        ttl_seconds: int = 0,
-    ) -> Optional[Any]:
-        """Return a cached value, or None on miss/stale/error."""
-
-    def write(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        value: Any,
-        ttl_seconds: int = 0,
-    ) -> None:
-        """Persist a JSON-serializable cached value."""
-
-
-class NullCacheBackend:
-    def read(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        ttl_seconds: int = 0,
-    ) -> Optional[Any]:
-        return None
-
-    def write(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        value: Any,
-        ttl_seconds: int = 0,
-    ) -> None:
-        return None
-
-
-class FileCacheBackend:
-    def __init__(self, cache_dir: Path):
-        self.cache_dir = cache_dir
-
-    def _path(self, namespace: str, key_payload: dict[str, Any]) -> Path:
-        return (
-            self.cache_dir
-            / _safe_namespace(namespace)
-            / f"{_stable_cache_key(key_payload)}.json"
-        )
-
-    def read(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        ttl_seconds: int = 0,
-    ) -> Optional[Any]:
-        path = self._path(namespace, key_payload)
-        if not path.exists():
-            return None
-        if ttl_seconds > 0 and time() - path.stat().st_mtime > ttl_seconds:
-            return None
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return None
-
-    def write(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        value: Any,
-        ttl_seconds: int = 0,
-    ) -> None:
-        path = self._path(namespace, key_payload)
-        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path.write_text(
-                json.dumps(value, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            os.replace(tmp_path, path)
-        except OSError:
-            try:
-                tmp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
-
-
-class RedisCacheBackend:
-    def __init__(self, redis_url: str, prefix: str):
-        try:
-            import redis
-        except ImportError as exc:
-            raise RuntimeError(
-                "Redis cache backend requires the optional `redis` package."
-            ) from exc
-        self.client = redis.Redis.from_url(redis_url)
-        self.prefix = prefix
-
-    def _key(self, namespace: str, key_payload: dict[str, Any]) -> str:
-        return f"{self.prefix}:{_safe_namespace(namespace)}:{_stable_cache_key(key_payload)}"
-
-    def read(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        ttl_seconds: int = 0,
-    ) -> Optional[Any]:
-        try:
-            raw = self.client.get(self._key(namespace, key_payload))
-        except Exception as exc:  # pragma: no cover - depends on Redis runtime
-            logger.warning("Redis curation cache read failed: %s", exc)
-            return None
-        if not raw:
-            return None
-        try:
-            cached = json.loads(raw)
-        except (ValueError, TypeError):
-            return None
-        if (
-            ttl_seconds > 0
-            and time() - float(cached.get("stored_at", 0)) > ttl_seconds
-        ):
-            return None
-        return cached.get("value")
-
-    def write(
-        self,
-        namespace: str,
-        key_payload: dict[str, Any],
-        value: Any,
-        ttl_seconds: int = 0,
-    ) -> None:
-        payload = {"stored_at": time(), "value": value}
-        try:
-            kwargs = {"ex": ttl_seconds} if ttl_seconds > 0 else {}
-            self.client.set(
-                self._key(namespace, key_payload),
-                json.dumps(payload, sort_keys=True),
-                **kwargs,
-            )
-        except Exception as exc:  # pragma: no cover - depends on Redis runtime
-            logger.warning("Redis curation cache write failed: %s", exc)
-
-
-_CACHE_BACKEND: Optional[CacheBackend] = None
-_CACHE_BACKEND_CONFIG: Optional[tuple[str, str, str, str, str]] = None
-
-
-def _cache_backend() -> CacheBackend:
-    global _CACHE_BACKEND, _CACHE_BACKEND_CONFIG
-    config = (
-        os.environ.get("FUSION_GENE_CURATION_CACHE", "1"),
-        os.environ.get("FUSION_GENE_CURATION_CACHE_BACKEND", "file"),
-        os.environ.get("FUSION_GENE_CURATION_REDIS_URL")
-        or os.environ.get("REDIS_URL")
-        or "",
-        os.environ.get(
-            "FUSION_GENE_CURATION_CACHE_PREFIX",
-            "fusion-annotation:gene-curation",
-        ),
-        os.environ.get("FUSION_GENE_CURATION_CACHE_DIR", ""),
-    )
-    if _CACHE_BACKEND is not None and _CACHE_BACKEND_CONFIG == config:
-        return _CACHE_BACKEND
-
-    if not _cache_enabled():
-        _CACHE_BACKEND = NullCacheBackend()
-        _CACHE_BACKEND_CONFIG = config
-        return _CACHE_BACKEND
-    backend = (
-        os.environ.get("FUSION_GENE_CURATION_CACHE_BACKEND", "file")
-        .strip()
-        .lower()
-    )
-    if backend in {"0", "false", "no", "none", "disabled"}:
-        _CACHE_BACKEND = NullCacheBackend()
-        _CACHE_BACKEND_CONFIG = config
-        return _CACHE_BACKEND
-    if backend == "redis":
-        redis_url = os.environ.get("FUSION_GENE_CURATION_REDIS_URL") or os.environ.get(
-            "REDIS_URL"
-        )
-        if not redis_url:
-            logger.warning(
-                "FUSION_GENE_CURATION_CACHE_BACKEND=redis set without REDIS_URL; falling back to file cache."
-            )
-            _CACHE_BACKEND = FileCacheBackend(_cache_dir())
-            _CACHE_BACKEND_CONFIG = config
-            return _CACHE_BACKEND
-        prefix = os.environ.get(
-            "FUSION_GENE_CURATION_CACHE_PREFIX",
-            "fusion-annotation:gene-curation",
-        )
-        try:
-            _CACHE_BACKEND = RedisCacheBackend(redis_url, prefix)
-        except RuntimeError as exc:
-            logger.warning("%s Falling back to file cache.", exc)
-            _CACHE_BACKEND = FileCacheBackend(_cache_dir())
-        _CACHE_BACKEND_CONFIG = config
-        return _CACHE_BACKEND
-    if backend != "file":
-        logger.warning(
-            "Unknown curation cache backend %r; falling back to file cache.",
-            backend,
-        )
-    _CACHE_BACKEND = FileCacheBackend(_cache_dir())
-    _CACHE_BACKEND_CONFIG = config
-    return _CACHE_BACKEND
-
-
-def _read_cache(
-    namespace: str,
-    key_payload: dict[str, Any],
-    ttl_seconds: int = 0,
-) -> Optional[Any]:
-    return _cache_backend().read(namespace, key_payload, ttl_seconds)
-
-
-def _write_cache(
-    namespace: str,
-    key_payload: dict[str, Any],
-    value: Any,
-    ttl_seconds: int = 0,
-) -> None:
-    _cache_backend().write(namespace, key_payload, value, ttl_seconds)
-
-
-def _cache_path(namespace: str, key_payload: dict[str, Any]) -> Path:
-    return FileCacheBackend(_cache_dir())._path(namespace, key_payload)
-
-
-def _record_to_cache(record: PubMedRecord) -> dict[str, str]:
-    return {"pmid": record.pmid, "title": record.title, "abstract": record.abstract}
-
-
-def _record_from_cache(value: dict[str, str]) -> PubMedRecord:
-    return PubMedRecord(
-        pmid=str(value.get("pmid", "")),
-        title=str(value.get("title", "")),
-        abstract=str(value.get("abstract", "")),
-    )
 
 
 def _fusion_value(fusion: object, attr: str) -> Any:
@@ -548,21 +270,6 @@ def retrieve_pubmed_records(
 ) -> list[PubMedRecord]:
     fusion_contexts = fusion_contexts or []
     queries = _pubmed_queries(gene, fusion_contexts)
-    cache_key = {
-        "version": "pubmed-records-v1",
-        "gene": gene.upper(),
-        "max_results": max_results,
-        "queries": queries,
-    }
-    ttl_seconds = max(0, int(os.environ.get("FUSION_GENE_CURATION_PUBMED_CACHE_TTL_SECONDS", "86400")))
-    cached = _read_cache("pubmed-records", cache_key, ttl_seconds=ttl_seconds)
-    if isinstance(cached, list):
-        return [
-            _record_from_cache(item)
-            for item in cached
-            if isinstance(item, dict) and item.get("pmid")
-        ]
-
     pmids = []
     seen_pmids = set()
     for query in queries:
@@ -582,7 +289,6 @@ def retrieve_pubmed_records(
                 seen_pmids.add(pmid)
                 pmids.append(pmid)
     if not pmids:
-        _write_cache("pubmed-records", cache_key, [], ttl_seconds=ttl_seconds)
         return []
 
     fetch_params = {
@@ -610,35 +316,7 @@ def retrieve_pubmed_records(
         ).strip()
         if pmid and abstract:
             records.append(PubMedRecord(pmid=pmid, title=title, abstract=abstract))
-    _write_cache(
-        "pubmed-records",
-        cache_key,
-        [_record_to_cache(record) for record in records],
-        ttl_seconds=ttl_seconds,
-    )
     return records
-
-
-def _curation_cache_key(
-    gene: str,
-    records: list[PubMedRecord],
-    model: str,
-    fusion_contexts: list[FusionCurationContext],
-) -> dict[str, Any]:
-    return {
-        "version": "gene-curation-v1",
-        "gene": gene.upper(),
-        "model": model,
-        "fusion_contexts": _context_dicts(fusion_contexts),
-        "records": [
-            {
-                "pmid": record.pmid,
-                "title_sha256": _text_digest(record.title),
-                "abstract_sha256": _text_digest(record.abstract),
-            }
-            for record in records
-        ],
-    }
 
 
 def _no_pubmed_evidence_result(
@@ -723,16 +401,6 @@ def curate_gene(
     if not records:
         return _no_pubmed_evidence_result(gene, fusion_contexts)
 
-    cache_key = _curation_cache_key(gene, records, model, fusion_contexts)
-    cache_key["abstract_chars"] = abstract_chars
-    result_ttl_seconds = max(
-        0,
-        int(os.environ.get("FUSION_GENE_CURATION_RESULT_CACHE_TTL_SECONDS", "2592000")),
-    )
-    cached = _read_cache("gene-curation", cache_key, ttl_seconds=result_ttl_seconds)
-    if isinstance(cached, dict):
-        return cached
-
     context = "\n\n".join(
         f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
         for record in records
@@ -795,7 +463,6 @@ because a kinase domain is retained; supporting PubMed evidence is still require
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
-    _write_cache("gene-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload
 
 
