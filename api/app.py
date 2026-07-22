@@ -18,8 +18,10 @@ MCP server.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import os
 import sys
+import threading
 from typing import Optional
 
 import requests
@@ -123,12 +125,68 @@ class BatchAnnotateResponse(BaseModel):
     results: list[BatchAnnotateItemResult]
 
 
+def _batch_worker_count(item_count: int) -> int:
+    if item_count <= 1:
+        return 1
+    configured = os.environ.get("FUSION_ANNOTATION_BATCH_WORKERS")
+    if configured:
+        return max(1, int(configured))
+    return min(8, item_count)
+
+
 def _annotate_with_provider(provider, params: AnnotateRequest) -> dict:
     return annotate_fusion(
         provider, params.five_gene, params.three_gene,
         five_exon=params.five_exon, three_exon=params.three_exon,
         five_tx=params.five_transcript, three_tx=params.three_transcript,
         five_genomic=params.five_genomic, three_genomic=params.three_genomic)
+
+
+def _annotate_batch_items(fusions: list[AnnotateRequest]) -> list[BatchAnnotateItemResult]:
+    """Annotate batch rows concurrently while keeping provider state thread-local."""
+    thread_state = threading.local()
+
+    def provider_for(item: AnnotateRequest):
+        providers = getattr(thread_state, "providers", None)
+        if providers is None:
+            providers = {}
+            thread_state.providers = providers
+        provider_key = (item.species, item.genome_build)
+        if provider_key not in providers:
+            providers[provider_key] = make_provider(
+                species=item.species,
+                assembly=item.genome_build,
+            )
+        return providers[provider_key]
+
+    def annotate_one(index: int, item: AnnotateRequest) -> tuple[int, BatchAnnotateItemResult]:
+        try:
+            result = _annotate_with_provider(provider_for(item), item)
+            return index, BatchAnnotateItemResult(input=item, result=result)
+        except (ValueError, KeyError) as exc:
+            return index, BatchAnnotateItemResult(input=item, error=str(exc))
+        except requests.exceptions.RequestException as exc:
+            return index, BatchAnnotateItemResult(
+                input=item,
+                error=f"upstream annotation source error: {exc}",
+            )
+
+    results: list[BatchAnnotateItemResult | None] = [None] * len(fusions)
+    max_workers = _batch_worker_count(len(fusions))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [
+            executor.submit(annotate_one, index, item)
+            for index, item in enumerate(fusions)
+        ]
+        for future in as_completed(futures):
+            index, result = future.result()
+            results[index] = result
+
+    return [
+        result
+        for result in results
+        if result is not None
+    ]
 
 
 def _run_annotation(params: AnnotateRequest) -> dict:
@@ -200,33 +258,11 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
     """Annotate multiple fusions in one request.
 
     The batch path reuses one provider instance per request so repeated Genome
-    Nexus/CIViC setup work is not repeated for every row. Individual bad inputs
-    are returned as per-item errors instead of failing the whole batch.
+    Nexus/CIViC setup work is not repeated for every row handled by the same
+    worker. Individual bad inputs are returned as per-item errors instead of
+    failing the whole batch.
     """
-    providers = {}
-    results = []
-    for item in params.fusions:
-        try:
-            provider_key = (item.species, item.genome_build)
-            if provider_key not in providers:
-                providers[provider_key] = make_provider(
-                    species=item.species,
-                    assembly=item.genome_build,
-                )
-            provider = providers[provider_key]
-            result = _annotate_with_provider(provider, item)
-            results.append(BatchAnnotateItemResult(input=item, result=result))
-        except (ValueError, KeyError) as exc:
-            results.append(BatchAnnotateItemResult(input=item, error=str(exc)))
-        except requests.exceptions.RequestException as exc:
-            results.append(
-                BatchAnnotateItemResult(
-                    input=item,
-                    error=f"upstream annotation source error: {exc}",
-                )
-            )
-
-    return BatchAnnotateResponse(results=results)
+    return BatchAnnotateResponse(results=_annotate_batch_items(params.fusions))
 
 
 if __name__ == "__main__":
