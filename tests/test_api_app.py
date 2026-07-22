@@ -290,8 +290,8 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
     assert seen["fusions"][0].five_exon is None
     assert seen["fusions"][0].three_exon is None
     assert seen["force_gene_curation"] is False
-    assert "result" not in seen["annotation_results"][0]
-    assert "no breakpoint given" in seen["annotation_results"][0]["error"]
+    assert seen["annotation_results"][0]["result"]["interface"]["frame_status"] == "unknown"
+    assert seen["annotation_results"][0].get("error") is None
     assert r.json()["genes"][0]["gene"] == "ROS1"
 
 

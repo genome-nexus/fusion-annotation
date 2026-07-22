@@ -244,15 +244,18 @@ def _fusion_specificity(result: Optional[dict]) -> str:
         return "gene_pair_only"
 
     iface = result.get("interface", {})
-    if (
-        iface.get("five_last_aa") is not None
-        or iface.get("three_first_aa") is not None
-        or iface.get("domains")
-    ):
+    if iface.get("frame_status") == "unknown":
+        return "gene_pair_only"
+    if iface.get("five_last_aa") is not None or iface.get("three_first_aa") is not None:
+        return "protein_domain_level"
+    domains = iface.get("domains") or []
+    if any(str(domain.get("status", "")).upper() != "UNKNOWN" for domain in domains):
         return "protein_domain_level"
 
     resolved = result.get("resolved", {})
-    if resolved.get("five") or resolved.get("three"):
+    five_breakpoint = (resolved.get("five") or {}).get("breakpoint") or {}
+    three_breakpoint = (resolved.get("three") or {}).get("breakpoint") or {}
+    if five_breakpoint.get("type") != "unknown" and three_breakpoint.get("type") != "unknown":
         return "exon_level"
 
     return "gene_pair_only"
@@ -263,7 +266,7 @@ def _context_limitations(
     result: Optional[dict],
     error: Optional[str],
 ) -> tuple[str, ...]:
-    if result:
+    if result and _fusion_specificity(result) != "gene_pair_only":
         return ()
 
     limitations = [
@@ -294,14 +297,15 @@ def _context_for_gene(
     three = resolved.get("three") or {}
     iface = result.get("interface", {}) if result else {}
     kinase_gene, kinase_side, kinase_status = _kinase_signal(result, five_gene, three_gene)
-    breakpoint_context_available = result is not None
+    fusion_specificity = _fusion_specificity(result)
+    breakpoint_context_available = fusion_specificity != "gene_pair_only"
     return FusionCurationContext(
         gene=gene,
         fusion=_fusion_label(fusion),
         side=side,
         partner_gene=partner_gene,
         breakpoint_context_available=breakpoint_context_available,
-        fusion_specificity=_fusion_specificity(result),
+        fusion_specificity=fusion_specificity,
         five_transcript=_optional_str(five.get("transcript")) or _optional_str(_fusion_value(fusion, "five_transcript")),
         three_transcript=_optional_str(three.get("transcript")) or _optional_str(_fusion_value(fusion, "three_transcript")),
         five_exon=_resolved_exon(five, _input_exon(fusion, "five_exon")),

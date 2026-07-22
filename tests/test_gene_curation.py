@@ -440,6 +440,46 @@ def test_fusion_context_marks_gene_pair_only_when_annotation_unavailable():
     assert "Exact Genome Nexus breakpoint context was unavailable" in ros1.limitations[0]
 
 
+def test_fusion_context_marks_gene_pair_only_when_breakpoint_unknown():
+    class Fusion:
+        five_gene = "CD74"
+        three_gene = "ROS1"
+
+    annotation_result = {
+        "interface": {
+            "frame_status": "unknown",
+            "five_last_aa": None,
+            "three_first_aa": None,
+            "domains": [
+                {
+                    "gene": "ROS1",
+                    "name": "Protein kinase domain",
+                    "type": "domain",
+                    "accession": "IPR000719",
+                    "start": 1946,
+                    "end": 2222,
+                    "status": "UNKNOWN",
+                }
+            ],
+        },
+        "resolved": {
+            "five": {"breakpoint": {"type": "unknown"}},
+            "three": {"breakpoint": {"type": "unknown"}},
+        },
+    }
+
+    contexts = gene_curation.fusion_contexts_by_gene(
+        [Fusion()],
+        annotation_results=[{"input": Fusion(), "result": annotation_result, "error": None}],
+    )
+
+    ros1 = contexts["ROS1"][0]
+    assert ros1.breakpoint_context_available is False
+    assert ros1.fusion_specificity == "gene_pair_only"
+    assert ros1.kinase_domain_status == "unknown"
+    assert "Exact Genome Nexus breakpoint context was unavailable" in ros1.limitations[0]
+
+
 def test_curate_gene_prompt_warns_against_position_claims_for_gene_pair_only(monkeypatch):
     monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(
