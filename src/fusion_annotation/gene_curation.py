@@ -659,7 +659,114 @@ def _strip_markdown_json_fence(text: str) -> str:
     lines = cleaned.splitlines()
     if len(lines) >= 2 and lines[-1].strip().startswith("```"):
         return "\n".join(lines[1:-1]).strip()
+    if len(lines) >= 2 and lines[0].strip().startswith("```"):
+        return "\n".join(lines[1:]).strip()
     return cleaned
+
+
+def _extract_json_object(text: str) -> dict:
+    cleaned = _strip_markdown_json_fence(text)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    start = cleaned.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("no JSON object found", cleaned, 0)
+
+    in_string = False
+    escaped = False
+    depth = 0
+    for index, char in enumerate(cleaned[start:], start=start):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = cleaned[start:index + 1]
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+                break
+    raise json.JSONDecodeError("no complete JSON object found", cleaned, start)
+
+
+def _looks_like_json_blob(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith("{") or text.startswith("```"):
+        return True
+    return (
+        '"rationale"' in text
+        and (
+            '"supporting_pmids"' in text
+            or '"retrieved_pmids"' in text
+            or '"fusion_literature_identified"' in text
+        )
+    )
+
+
+def _normal_model_parse_fallback(
+    *,
+    subject_label: str,
+    subject: str,
+    records: list[PubMedRecord],
+    fusion_contexts: list[FusionCurationContext],
+    fusion_result: bool,
+) -> dict:
+    payload = {
+        subject_label: subject,
+        "cancer_associated": None,
+        "rationale": (
+            "The curation model returned a malformed structured response, so this "
+            "result should be regenerated before review."
+        ),
+        "supporting_pmids": [],
+        "retrieved_pmids": [record.pmid for record in records],
+        "fusion_contexts": _context_dicts(fusion_contexts),
+        "insufficient_evidence": True,
+    }
+    if fusion_result:
+        payload["fusion_literature_identified"] = None
+    return payload
+
+
+def _repair_json_rationale(payload: dict) -> dict:
+    rationale = payload.get("rationale")
+    if not _looks_like_json_blob(rationale):
+        return payload
+    try:
+        parsed = _extract_json_object(str(rationale))
+    except json.JSONDecodeError:
+        payload["rationale"] = (
+            "The curation model returned malformed JSON in the rationale field; "
+            "rerun curation to regenerate this result."
+        )
+        payload["insufficient_evidence"] = True
+        return payload
+    repaired = {**payload, **parsed}
+    if _looks_like_json_blob(repaired.get("rationale")):
+        repaired["rationale"] = (
+            "The curation model returned malformed JSON in the rationale field; "
+            "rerun curation to regenerate this result."
+        )
+        repaired["insufficient_evidence"] = True
+    return repaired
 
 
 def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
@@ -1116,6 +1223,11 @@ def curate_gene(
     )
     cached = _read_cache("gene-curation", cache_key, ttl_seconds=result_ttl_seconds)
     if isinstance(cached, dict):
+        cached = _repair_json_rationale(cached)
+        cached.setdefault("gene", gene)
+        cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached["fusion_contexts"] = _context_dicts(fusion_contexts)
+        cached.setdefault("curation_source", "PubMed + LLM")
         return cached
 
     context = "\n\n".join(
@@ -1169,17 +1281,16 @@ junction, retained/lost domains, or kinase-domain retention.
         if getattr(block, "type", None) == "text"
     ).strip()
     try:
-        payload = json.loads(_strip_markdown_json_fence(text))
+        payload = _extract_json_object(text)
     except json.JSONDecodeError:
-        payload = {
-            "gene": gene,
-            "cancer_associated": None,
-            "rationale": text,
-            "supporting_pmids": [],
-            "retrieved_pmids": [record.pmid for record in records],
-            "fusion_contexts": _context_dicts(fusion_contexts),
-            "insufficient_evidence": True,
-        }
+        payload = _normal_model_parse_fallback(
+            subject_label="gene",
+            subject=gene,
+            records=records,
+            fusion_contexts=fusion_contexts,
+            fusion_result=False,
+        )
+    payload = _repair_json_rationale(payload)
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
@@ -1221,6 +1332,10 @@ def curate_fusion(
     )
     cached = _read_cache("fusion-curation", cache_key, ttl_seconds=result_ttl_seconds)
     if isinstance(cached, dict):
+        cached = _repair_json_rationale(cached)
+        cached.setdefault("fusion", fusion)
+        cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached["fusion_contexts"] = _context_dicts(fusion_contexts)
         return cached
 
     context = "\n\n".join(
@@ -1272,18 +1387,16 @@ kinase-domain status beyond the Genome Nexus context.
         if getattr(block, "type", None) == "text"
     ).strip()
     try:
-        payload = json.loads(_strip_markdown_json_fence(text))
+        payload = _extract_json_object(text)
     except json.JSONDecodeError:
-        payload = {
-            "fusion": fusion,
-            "fusion_literature_identified": None,
-            "cancer_associated": None,
-            "rationale": text,
-            "supporting_pmids": [],
-            "retrieved_pmids": [record.pmid for record in records],
-            "fusion_contexts": _context_dicts(fusion_contexts),
-            "insufficient_evidence": True,
-        }
+        payload = _normal_model_parse_fallback(
+            subject_label="fusion",
+            subject=fusion,
+            records=records,
+            fusion_contexts=fusion_contexts,
+            fusion_result=True,
+        )
+    payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
