@@ -444,6 +444,36 @@ transient NCBI 429/5xx responses.
 delay between NCBI requests for a deployment. The default curation model is
 `claude-haiku-4-5-20251001`; set `FUSION_GENE_CURATION_MODEL` to override it.
 
+Server-side fusion-gene curation uses a pluggable JSON cache for PubMed
+retrieval and LLM synthesis results. The default remains a local file cache,
+which is useful for local development and single-instance deployments. Shared
+deployment cache can be enabled without touching curation code:
+
+```bash
+# default local cache
+FUSION_GENE_CURATION_CACHE_BACKEND=file
+FUSION_GENE_CURATION_CACHE_DIR=/tmp/fusion-annotation/gene-curation-cache
+FUSION_GENE_CURATION_PUBMED_CACHE_TTL_SECONDS=86400
+FUSION_GENE_CURATION_RESULT_CACHE_TTL_SECONDS=2592000
+
+# shared Redis cache
+FUSION_GENE_CURATION_CACHE_BACKEND=redis
+FUSION_GENE_CURATION_REDIS_URL=redis://redis-host:6379/0
+FUSION_GENE_CURATION_CACHE_PREFIX=fusion-annotation:gene-curation
+
+# disable curation cache
+FUSION_GENE_CURATION_CACHE=0
+```
+
+`REDIS_URL` is also accepted when `FUSION_GENE_CURATION_REDIS_URL` is unset.
+The PubMed cache includes empty retrievals, which avoids repeated NCBI calls
+for novel or low-literature genes. File cache staleness is checked on read;
+Redis writes use native key expiry from the TTL values above. Redis memory
+limits, eviction policy, TLS/auth, persistence, and backups are deployment
+settings on the Redis instance rather than application code. The `.[api]`
+extra includes the Redis client so Cloud Run or another API deployment can
+switch from file cache to shared Redis through environment configuration.
+
 Run both locally:
 
 ```bash
