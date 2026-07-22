@@ -425,8 +425,8 @@ When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
 skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
 per-gene override when deeper review is needed. When exact-fusion literature is
 sparse, the two involved gene sections can be expanded to review gene-level
-driver signal, confidence label, rationale, supporting PMIDs, and retrieved
-PMIDs. Gene-level curation checks OncoKB first via the curated-gene list and
+driver signal, rationale, supporting PMIDs, and retrieved PMIDs. Gene-level
+curation checks OncoKB first via the curated-gene list and
 uses the OncoKB gene type, summary/background, and highest evidence levels when
 available. That avoids PubMed retrieval and LLM synthesis for genes already
 covered by OncoKB. PubMed/LLM gene synthesis is only used when an OncoKB token

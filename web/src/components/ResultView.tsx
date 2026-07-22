@@ -198,17 +198,6 @@ function pubmedUrl(pmid: string) {
   return `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
 }
 
-function confidenceLabel(item?: GeneCurationGeneResult | GeneCurationFusionResult) {
-  if (!item || item.insufficient_evidence) return "Low";
-  if (item.cancer_associated === true) return "Higher";
-  if (item.cancer_associated === false) return "Lower";
-  return "Uncertain";
-}
-
-function confidenceHelpText() {
-  return "Evidence sufficiency for reviewer triage; not a formal oncogenicity probability, tier, or evidence level.";
-}
-
 function renderFusionContext(context: GeneFusionCurationContext) {
   const breakpoint = context.side === "five_prime"
     ? {
@@ -366,7 +355,7 @@ function GeneInformationSection({
             <span className="gene-info-symbol">{result.interface.categorical_key}</span>
             <span className="gene-info-summary">
               {fusionItem
-                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · curation confidence ${confidenceLabel(fusionItem)}`
+                ? fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"
                 : "No fusion-specific literature curation loaded"}
             </span>
           </summary>
@@ -392,11 +381,6 @@ function GeneInformationSection({
                   <dt>Known driver signal</dt>
                   <dd>
                     {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
-                  </dd>
-                  <dt>Curation confidence</dt>
-                  <dd title={confidenceHelpText()}>
-                    {confidenceLabel(fusionItem)}
-                    <span className="field-help"> {confidenceHelpText()}</span>
                   </dd>
                   <dt>Rationale</dt>
                   <dd>{fusionItem.rationale || "No rationale returned."}</dd>
@@ -460,7 +444,7 @@ function GeneInformationSection({
                 <span className="gene-info-symbol">{gene}</span>
                 <span className="gene-info-summary">
                   {item
-                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · curation confidence ${confidenceLabel(item)}`
+                    ? item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"
                     : "No gene details loaded"}
                 </span>
                 {onCurateGene && (
@@ -530,11 +514,6 @@ function GeneInformationSection({
                       )}
                       <dt>Known driver signal</dt>
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
-                      <dt>Curation confidence</dt>
-                      <dd title={confidenceHelpText()}>
-                        {confidenceLabel(item)}
-                        <span className="field-help"> {confidenceHelpText()}</span>
-                      </dd>
                       <dt>Rationale</dt>
                       <dd>{item.rationale || "No rationale returned."}</dd>
                       <dt>Fusion knowledge</dt>
