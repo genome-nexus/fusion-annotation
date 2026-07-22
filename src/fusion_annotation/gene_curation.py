@@ -331,11 +331,21 @@ def _record_from_cache(value: dict[str, str]) -> PubMedRecord:
     )
 
 
+def _fusion_value(fusion: object, attr: str) -> Any:
+    if isinstance(fusion, dict):
+        return fusion.get(attr)
+    return getattr(fusion, attr, None)
+
+
 def unique_genes_from_fusions(fusions: Iterable[object]) -> list[str]:
     genes: list[str] = []
     seen = set()
     for fusion in fusions:
-        for gene in (getattr(fusion, "five_gene"), getattr(fusion, "three_gene")):
+        if fusion is None:
+            continue
+        for gene in (_fusion_value(fusion, "five_gene"), _fusion_value(fusion, "three_gene")):
+            if gene is None:
+                continue
             normalized = str(gene).strip().upper()
             if normalized and normalized not in seen:
                 seen.add(normalized)
@@ -344,7 +354,7 @@ def unique_genes_from_fusions(fusions: Iterable[object]) -> list[str]:
 
 
 def _fusion_label(fusion: object) -> str:
-    return f"{getattr(fusion, 'five_gene')}::{getattr(fusion, 'three_gene')}"
+    return f"{_fusion_value(fusion, 'five_gene')}::{_fusion_value(fusion, 'three_gene')}"
 
 
 def _optional_str(value: object) -> Optional[str]:
@@ -355,7 +365,7 @@ def _optional_str(value: object) -> Optional[str]:
 
 
 def _input_exon(fusion: object, attr: str) -> Optional[str]:
-    return _optional_str(getattr(fusion, attr, None))
+    return _optional_str(_fusion_value(fusion, attr))
 
 
 def _breakpoint_genomic(partner: dict) -> Optional[str]:
@@ -441,8 +451,8 @@ def _context_for_gene(
     result: Optional[dict] = None,
     error: Optional[str] = None,
 ) -> FusionCurationContext:
-    five_gene = str(getattr(fusion, "five_gene"))
-    three_gene = str(getattr(fusion, "three_gene"))
+    five_gene = str(_fusion_value(fusion, "five_gene"))
+    three_gene = str(_fusion_value(fusion, "three_gene"))
     side = "five_prime" if gene.upper() == five_gene.upper() else "three_prime"
     partner_gene = three_gene if side == "five_prime" else five_gene
     resolved = result.get("resolved", {}) if result else {}
@@ -455,12 +465,12 @@ def _context_for_gene(
         fusion=_fusion_label(fusion),
         side=side,
         partner_gene=partner_gene,
-        five_transcript=_optional_str(five.get("transcript")) or _optional_str(getattr(fusion, "five_transcript", None)),
-        three_transcript=_optional_str(three.get("transcript")) or _optional_str(getattr(fusion, "three_transcript", None)),
+        five_transcript=_optional_str(five.get("transcript")) or _optional_str(_fusion_value(fusion, "five_transcript")),
+        three_transcript=_optional_str(three.get("transcript")) or _optional_str(_fusion_value(fusion, "three_transcript")),
         five_exon=_resolved_exon(five, _input_exon(fusion, "five_exon")),
         three_exon=_resolved_exon(three, _input_exon(fusion, "three_exon")),
-        five_genomic=_breakpoint_genomic(five) or _optional_str(getattr(fusion, "five_genomic", None)),
-        three_genomic=_breakpoint_genomic(three) or _optional_str(getattr(fusion, "three_genomic", None)),
+        five_genomic=_breakpoint_genomic(five) or _optional_str(_fusion_value(fusion, "five_genomic")),
+        three_genomic=_breakpoint_genomic(three) or _optional_str(_fusion_value(fusion, "three_genomic")),
         five_protein_breakpoint=f"p.{iface.get('five_last_aa')}" if iface.get("five_last_aa") is not None else None,
         three_protein_breakpoint=f"p.{iface.get('three_first_aa')}" if iface.get("three_first_aa") is not None else None,
         retained_domains=_domains_for_gene(result, gene, "RETAINED"),
@@ -483,7 +493,9 @@ def fusion_contexts_by_gene(
         item = result_items[index] if index < len(result_items) else {}
         result = item.get("result") if isinstance(item, dict) else None
         error = item.get("error") if isinstance(item, dict) else None
-        for gene in (getattr(fusion, "five_gene"), getattr(fusion, "three_gene")):
+        for gene in (_fusion_value(fusion, "five_gene"), _fusion_value(fusion, "three_gene")):
+            if gene is None:
+                continue
             normalized = str(gene).strip().upper()
             if not normalized:
                 continue
@@ -495,6 +507,16 @@ def fusion_contexts_by_gene(
 
 def _context_dicts(contexts: list[FusionCurationContext]) -> list[dict]:
     return [asdict(context) for context in contexts]
+
+
+def _strip_markdown_json_fence(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned.startswith("```"):
+        return cleaned
+    lines = cleaned.splitlines()
+    if len(lines) >= 2 and lines[-1].strip().startswith("```"):
+        return "\n".join(lines[1:-1]).strip()
+    return cleaned
 
 
 def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
@@ -580,10 +602,11 @@ def retrieve_pubmed_records(
         pmid_el = article.find(".//PMID")
         pmid = pmid_el.text if pmid_el is not None else None
         title_el = article.find(".//ArticleTitle")
-        title = (title_el.text or "").strip() if title_el is not None else ""
+        title = "".join(title_el.itertext()).strip() if title_el is not None else ""
         abstract_parts = article.findall(".//AbstractText")
         abstract = " ".join(
-            (part.text or "").strip() for part in abstract_parts if part.text
+            "".join(part.itertext()).strip()
+            for part in abstract_parts
         ).strip()
         if pmid and abstract:
             records.append(PubMedRecord(pmid=pmid, title=title, abstract=abstract))
@@ -758,7 +781,7 @@ because a kinase domain is retained; supporting PubMed evidence is still require
         if getattr(block, "type", None) == "text"
     ).strip()
     try:
-        payload = json.loads(text)
+        payload = json.loads(_strip_markdown_json_fence(text))
     except json.JSONDecodeError:
         payload = {
             "gene": gene,

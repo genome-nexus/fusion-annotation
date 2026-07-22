@@ -258,6 +258,9 @@ function App() {
     activeRequest.current = controller;
     const requestId = requestSequence.current + 1;
     requestSequence.current = requestId;
+    curationRequestSequence.current += 1;
+    activeCurationRequest.current?.abort();
+    activeCurationRequest.current = null;
 
     setFormValues(params);
     setLoading(true);
@@ -267,6 +270,7 @@ function App() {
     setBatchLoading(false);
     setGeneCurationResults(null);
     setCurationError(null);
+    setCurationLoading(false);
     setDerived(null);
 
     if (shouldPushState) {
@@ -307,6 +311,9 @@ function App() {
     activeRequest.current = controller;
     const requestId = requestSequence.current + 1;
     requestSequence.current = requestId;
+    curationRequestSequence.current += 1;
+    activeCurationRequest.current?.abort();
+    activeCurationRequest.current = null;
 
     setBatchLoading(true);
     setLoading(false);
@@ -316,6 +323,7 @@ function App() {
     setBatchResults(null);
     setGeneCurationResults(null);
     setCurationError(null);
+    setCurationLoading(false);
 
     try {
       const response = await annotateFusionBatch(fusions, controller.signal);

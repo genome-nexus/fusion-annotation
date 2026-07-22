@@ -112,6 +112,66 @@ def test_retrieve_pubmed_records_caches_empty_results(tmp_path, monkeypatch):
     assert calls == 1
 
 
+def test_retrieve_pubmed_records_preserves_mixed_content_xml(tmp_path, monkeypatch):
+    class SearchResponse:
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"esearchresult": {"idlist": ["123"]}}
+
+    class FetchResponse:
+        text = """
+        <PubmedArticleSet>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>123</PMID>
+              <Article>
+                <ArticleTitle>ALK <i>fusion</i> evidence</ArticleTitle>
+                <Abstract>
+                  <AbstractText>Kinase <b>domain</b> retained.</AbstractText>
+                  <AbstractText>Functional cancer evidence.</AbstractText>
+                </Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+        </PubmedArticleSet>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        if url == gene_curation.ESEARCH_URL:
+            return SearchResponse()
+        assert url == gene_curation.EFETCH_URL
+        return FetchResponse()
+
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+
+    records = gene_curation.retrieve_pubmed_records("ALK")
+
+    assert records == [
+        PubMedRecord(
+            pmid="123",
+            title="ALK fusion evidence",
+            abstract="Kinase domain retained. Functional cancer evidence.",
+        )
+    ]
+
+
+def test_unique_genes_from_fusions_accepts_dicts_and_missing_values():
+    assert gene_curation.unique_genes_from_fusions([
+        {"five_gene": "EML4", "three_gene": "ALK"},
+        {"five_gene": "ALK"},
+        None,
+        SimpleNamespace(five_gene="CD74", three_gene="ROS1"),
+    ]) == ["EML4", "ALK", "CD74", "ROS1"]
+
+
 def test_curate_gene_skips_model_when_pubmed_is_empty(monkeypatch):
     monkeypatch.setattr(gene_curation, "retrieve_pubmed_records", lambda *args, **kwargs: [])
     monkeypatch.setitem(sys.modules, "anthropic", None)
@@ -181,6 +241,55 @@ def test_curate_gene_reuses_persistent_cache(tmp_path, monkeypatch):
     assert first == second
     assert first["supporting_pmids"] == ["123"]
     assert calls == 1
+
+
+def test_curate_gene_parses_json_wrapped_in_markdown_fence(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            "```json\n"
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"ALK has functional cancer evidence.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                            "\n```"
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+
+    assert result["cancer_associated"] is True
+    assert result["supporting_pmids"] == ["123"]
 
 
 def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
