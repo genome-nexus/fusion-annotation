@@ -105,16 +105,38 @@ class AnnotateResponse(BaseModel):
     warnings: list[str]
 
 
+class BatchAnnotateRequest(BaseModel):
+    fusions: list[AnnotateRequest] = Field(
+        ...,
+        min_length=1,
+        description="Fusion annotations to run in one request.",
+    )
+
+
+class BatchAnnotateItemResult(BaseModel):
+    input: AnnotateRequest
+    result: Optional[AnnotateResponse] = None
+    error: Optional[str] = None
+
+
+class BatchAnnotateResponse(BaseModel):
+    results: list[BatchAnnotateItemResult]
+
+
+def _annotate_with_provider(provider, params: AnnotateRequest) -> dict:
+    return annotate_fusion(
+        provider, params.five_gene, params.three_gene,
+        five_exon=params.five_exon, three_exon=params.three_exon,
+        five_tx=params.five_transcript, three_tx=params.three_transcript,
+        five_genomic=params.five_genomic, three_genomic=params.three_genomic)
+
+
 def _run_annotation(params: AnnotateRequest) -> dict:
     """Shared handler for GET/POST /api/annotate — builds a provider and calls
     the core engine, translating engine-level errors into HTTP responses."""
     try:
         provider = make_provider(species=params.species, assembly=params.genome_build)
-        return annotate_fusion(
-            provider, params.five_gene, params.three_gene,
-            five_exon=params.five_exon, three_exon=params.three_exon,
-            five_tx=params.five_transcript, three_tx=params.three_transcript,
-            five_genomic=params.five_genomic, three_genomic=params.three_genomic)
+        return _annotate_with_provider(provider, params)
     except (ValueError, KeyError) as exc:
         # Bad/unresolvable input: unknown gene, non-coding exon, breakpoint
         # that doesn't map into the CDS, etc.
@@ -170,6 +192,41 @@ def annotate_post(request: Request, params: AnnotateRequest) -> dict:  # noqa: A
     Plain ``def`` for the same reason as annotate_get above.
     """
     return _run_annotation(params)
+
+
+@app.post("/api/annotate/batch", response_model=BatchAnnotateResponse)
+@limiter.limit(RATE_LIMIT)
+def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnotateResponse:  # noqa: ARG001
+    """Annotate multiple fusions in one request.
+
+    The batch path reuses one provider instance per request so repeated Genome
+    Nexus/CIViC setup work is not repeated for every row. Individual bad inputs
+    are returned as per-item errors instead of failing the whole batch.
+    """
+    providers = {}
+    results = []
+    for item in params.fusions:
+        try:
+            provider_key = (item.species, item.genome_build)
+            if provider_key not in providers:
+                providers[provider_key] = make_provider(
+                    species=item.species,
+                    assembly=item.genome_build,
+                )
+            provider = providers[provider_key]
+            result = _annotate_with_provider(provider, item)
+            results.append(BatchAnnotateItemResult(input=item, result=result))
+        except (ValueError, KeyError) as exc:
+            results.append(BatchAnnotateItemResult(input=item, error=str(exc)))
+        except requests.exceptions.RequestException as exc:
+            results.append(
+                BatchAnnotateItemResult(
+                    input=item,
+                    error=f"upstream annotation source error: {exc}",
+                )
+            )
+
+    return BatchAnnotateResponse(results=results)
 
 
 if __name__ == "__main__":

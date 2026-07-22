@@ -83,6 +83,90 @@ def test_annotate_post_matches_get(client):
     assert r.json()["interface"]["categorical_key"] == "EML4::ALK"
 
 
+def test_annotate_batch_returns_per_fusion_results(client):
+    r = client.post("/api/annotate/batch", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+            {"five_gene": "NOPE_NOT_A_GENE", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+        ]
+    })
+
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["results"]) == 2
+    assert body["results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
+    assert body["results"][0]["error"] is None
+    assert body["results"][1]["result"] is None
+    assert "NOPE_NOT_A_GENE" in body["results"][1]["error"]
+
+
+def test_annotate_batch_reuses_provider_by_species_and_build(monkeypatch):
+    calls = []
+
+    def fake_make_provider(species, assembly):
+        calls.append((species, assembly))
+        return {"species": species, "assembly": assembly}
+
+    def fake_annotate_with_provider(provider, params):
+        return {
+            "interface": {
+                "categorical_key": f"{params.five_gene}::{params.three_gene}",
+                "provider_key": f"{provider['species']}:{provider['assembly']}",
+            },
+            "knowledge": {},
+            "resolved": {},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(api_app, "make_provider", fake_make_provider)
+    monkeypatch.setattr(api_app, "_annotate_with_provider", fake_annotate_with_provider)
+
+    test_client = TestClient(api_app.app)
+    r = test_client.post("/api/annotate/batch", json={
+        "fusions": [
+            {
+                "five_gene": "EML4",
+                "three_gene": "ALK",
+                "five_exon": 13,
+                "three_exon": 20,
+                "species": "homo_sapiens",
+                "genome_build": "GRCh38",
+            },
+            {
+                "five_gene": "PAX8",
+                "three_gene": "PPARG",
+                "five_exon": 8,
+                "three_exon": 2,
+                "species": "mus_musculus",
+                "genome_build": "GRCm39",
+            },
+            {
+                "five_gene": "CD74",
+                "three_gene": "ROS1",
+                "five_exon": 6,
+                "three_exon": 34,
+                "species": "homo_sapiens",
+                "genome_build": "GRCh38",
+            },
+        ]
+    })
+
+    assert r.status_code == 200
+    body = r.json()
+    assert [
+        item["result"]["interface"]["provider_key"]
+        for item in body["results"]
+    ] == [
+        "homo_sapiens:GRCh38",
+        "mus_musculus:GRCm39",
+        "homo_sapiens:GRCh38",
+    ]
+    assert calls == [
+        ("homo_sapiens", "GRCh38"),
+        ("mus_musculus", "GRCm39"),
+    ]
+
+
 def test_annotate_missing_required_field(client):
     r = client.get("/api/annotate", params={"five_gene": "EML4"})
     assert r.status_code == 422  # FastAPI request validation, not our handler
