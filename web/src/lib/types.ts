@@ -133,12 +133,35 @@ export interface GeneCurationStatus {
   model: string;
 }
 
+export interface GeneFusionCurationContext {
+  gene: string;
+  fusion: string;
+  side: "five_prime" | "three_prime";
+  partner_gene: string;
+  five_transcript?: string | null;
+  three_transcript?: string | null;
+  five_exon?: string | null;
+  three_exon?: string | null;
+  five_genomic?: string | null;
+  three_genomic?: string | null;
+  five_protein_breakpoint?: string | null;
+  three_protein_breakpoint?: string | null;
+  retained_domains?: string[];
+  lost_domains?: string[];
+  disrupted_domains?: string[];
+  kinase_gene?: string | null;
+  kinase_gene_side?: "five_prime" | "three_prime" | null;
+  kinase_domain_status?: "retained" | "lost" | "disrupted" | "unknown" | null;
+  annotation_error?: string | null;
+}
+
 export interface GeneCurationGeneResult {
   gene: string;
   cancer_associated?: boolean | null;
   rationale?: string;
   supporting_pmids?: string[];
   retrieved_pmids?: string[];
+  fusion_contexts?: GeneFusionCurationContext[];
   insufficient_evidence?: boolean;
   error?: string;
 }

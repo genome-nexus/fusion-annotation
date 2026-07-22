@@ -19,6 +19,7 @@ import type {
   AnnotationResult,
   ApiError,
   BatchAnnotationItemResult,
+  GeneFusionCurationContext,
   GeneCurationGeneResult,
   GeneCurationStatus,
 } from "./lib/types";
@@ -97,6 +98,140 @@ function curationEvidenceSignal(item: GeneCurationGeneResult) {
 
 function curationBadges(item: GeneCurationGeneResult) {
   return [curationPriority(item), curationEvidenceSignal(item)];
+}
+
+function formatContextSide(context: GeneFusionCurationContext) {
+  return context.side === "five_prime" ? "5' partner" : "3' partner";
+}
+
+function formatDomainList(domains?: string[]) {
+  return domains && domains.length ? domains.join(", ") : "none";
+}
+
+function renderFusionContext(context: GeneFusionCurationContext) {
+  const breakpoint = context.side === "five_prime"
+    ? {
+        transcript: context.five_transcript,
+        exon: context.five_exon,
+        genomic: context.five_genomic,
+        protein: context.five_protein_breakpoint,
+      }
+    : {
+        transcript: context.three_transcript,
+        exon: context.three_exon,
+        genomic: context.three_genomic,
+        protein: context.three_protein_breakpoint,
+      };
+  return (
+    <div className="fusion-curation-context" key={`${context.gene}-${context.fusion}-${context.side}`}>
+      <div className="fusion-curation-context-title">
+        <strong>{context.fusion}</strong>
+        <span>{formatContextSide(context)}</span>
+      </div>
+      <dl>
+        <dt>Partner</dt>
+        <dd>{context.partner_gene}</dd>
+        <dt>Breakpoint</dt>
+        <dd>
+          tx {breakpoint.transcript || "unknown"} · exon {breakpoint.exon || "unknown"} · genomic{" "}
+          {breakpoint.genomic || "unknown"} · protein {breakpoint.protein || "unknown"}
+        </dd>
+        <dt>Domains</dt>
+        <dd>
+          retained: {formatDomainList(context.retained_domains)} · lost/disrupted:{" "}
+          {formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}
+        </dd>
+        <dt>Kinase</dt>
+        <dd>
+          {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
+        </dd>
+      </dl>
+      {context.annotation_error && (
+        <p className="fusion-curation-context-error">{context.annotation_error}</p>
+      )}
+    </div>
+  );
+}
+
+const CURATION_CSV_HEADERS = [
+  "gene",
+  "fusion",
+  "gene_side",
+  "partner_gene",
+  "five_transcript",
+  "three_transcript",
+  "five_exon",
+  "three_exon",
+  "five_genomic",
+  "three_genomic",
+  "five_protein_breakpoint",
+  "three_protein_breakpoint",
+  "retained_domains",
+  "lost_or_disrupted_domains",
+  "kinase_gene",
+  "kinase_gene_side",
+  "kinase_domain_status",
+  "cancer_associated",
+  "rationale",
+  "supporting_pmids",
+  "retrieved_pmids",
+  "insufficient_evidence",
+  "error",
+];
+
+function csvCell(value: unknown) {
+  if (value == null) return "";
+  const text = Array.isArray(value) ? value.join("; ") : String(value);
+  return `"${text.replaceAll('"', '""')}"`;
+}
+
+function curationCsvRows(items: GeneCurationGeneResult[]) {
+  const rows = [CURATION_CSV_HEADERS.map(csvCell).join(",")];
+  for (const item of items) {
+    const contexts = item.fusion_contexts?.length
+      ? item.fusion_contexts
+      : [null];
+    for (const context of contexts) {
+      rows.push([
+        item.gene,
+        context?.fusion,
+        context?.side,
+        context?.partner_gene,
+        context?.five_transcript,
+        context?.three_transcript,
+        context?.five_exon,
+        context?.three_exon,
+        context?.five_genomic,
+        context?.three_genomic,
+        context?.five_protein_breakpoint,
+        context?.three_protein_breakpoint,
+        context?.retained_domains,
+        [...(context?.lost_domains || []), ...(context?.disrupted_domains || [])],
+        context?.kinase_gene,
+        context?.kinase_gene_side,
+        context?.kinase_domain_status,
+        item.cancer_associated == null ? "" : item.cancer_associated ? "TRUE" : "FALSE",
+        item.rationale,
+        item.supporting_pmids,
+        item.retrieved_pmids,
+        item.insufficient_evidence ? "TRUE" : "FALSE",
+        item.error || context?.annotation_error,
+      ].map(csvCell).join(","));
+    }
+  }
+  return `${rows.join("\n")}\n`;
+}
+
+function downloadText(filename: string, text: string, type: string) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 function App() {
@@ -227,6 +362,15 @@ function App() {
     }
   }, []);
 
+  const exportGeneCurationCsv = useCallback(() => {
+    if (!geneCurationResults?.length) return;
+    downloadText(
+      "fusion_gene_curation.csv",
+      curationCsvRows(geneCurationResults),
+      "text/csv;charset=utf-8",
+    );
+  }, [geneCurationResults]);
+
   // On load (including a permalink being opened fresh), auto-run the
   // annotation if the URL already carries both gene names.
   useEffect(() => {
@@ -330,10 +474,17 @@ function App() {
 
       {geneCurationResults && (
         <section className="gene-curation-results">
-          <h2>Gene literature curation</h2>
-          <p className="gene-curation-note">
-            Server-side curation summarizes PubMed abstracts for the unique genes in the batch.
-          </p>
+          <div className="gene-curation-results-header">
+            <div>
+              <h2>Gene literature curation</h2>
+              <p className="gene-curation-note">
+                Server-side curation uses Genome Nexus fusion structure and PubMed abstracts for the batch.
+              </p>
+            </div>
+            <button type="button" className="secondary-button" onClick={exportGeneCurationCsv}>
+              Export curation CSV
+            </button>
+          </div>
           <div className="gene-curation-grid">
             {geneCurationResults.map((item) => (
               <article className="gene-curation-card" key={item.gene}>
@@ -355,6 +506,11 @@ function App() {
                   <div className="error-box">{item.error}</div>
                 ) : (
                   <>
+                    {item.fusion_contexts && item.fusion_contexts.length > 0 && (
+                      <div className="fusion-curation-contexts">
+                        {item.fusion_contexts.map(renderFusionContext)}
+                      </div>
+                    )}
                     <dl className="gene-curation-fields">
                       <dt>Cancer associated</dt>
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>

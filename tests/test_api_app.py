@@ -222,8 +222,9 @@ def test_gene_curation_status_reports_disabled_without_key(client, monkeypatch):
 def test_gene_curation_uses_server_side_service(client, monkeypatch):
     seen = {}
 
-    def fake_curate_fusion_genes(fusions):
+    def fake_curate_fusion_genes(fusions, annotation_results=None):
         seen["fusions"] = fusions
+        seen["annotation_results"] = annotation_results
         return {
             "genes": [
                 {
@@ -247,6 +248,7 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
 
     assert r.status_code == 200
     assert seen["fusions"][0].five_gene == "EML4"
+    assert seen["annotation_results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
@@ -258,7 +260,13 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "Functional cancer evidence" in app_tsx
     assert "Review priority" in app_tsx
     assert "without changing backend schema or tier logic" in app_tsx
+    assert "Server-side curation uses Genome Nexus fusion structure" in app_tsx
+    assert "fusion-curation-context" in app_tsx
+    assert "Export curation CSV" in app_tsx
+    assert "fusion_gene_curation.csv" in app_tsx
     assert ".curation-badges" in styles
+    assert ".fusion-curation-contexts" in styles
+    assert ".gene-curation-results-header" in styles
 
 
 def test_annotate_missing_required_field(client):

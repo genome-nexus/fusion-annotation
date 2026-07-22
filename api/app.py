@@ -284,11 +284,30 @@ def gene_curation_status() -> dict:
 @app.post("/api/gene-curation", response_model=GeneCurationResponse)
 @limiter.limit(RATE_LIMIT)
 def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # noqa: ARG001
-    """Run server-side literature curation for all unique genes in a batch."""
+    """Run server-side literature curation with Genome Nexus fusion context."""
     try:
-        return curate_fusion_genes(params.fusions)
+        provider = make_provider(
+            species=params.fusions[0].species,
+            assembly=params.fusions[0].genome_build,
+        )
+        annotation_results = []
+        for item in params.fusions:
+            try:
+                if item.species != params.fusions[0].species or item.genome_build != params.fusions[0].genome_build:
+                    provider = make_provider(species=item.species, assembly=item.genome_build)
+                annotation_results.append({"input": item, "result": _annotate_with_provider(provider, item)})
+            except (ValueError, KeyError) as exc:
+                annotation_results.append({"input": item, "error": str(exc)})
+            except requests.exceptions.RequestException as exc:
+                annotation_results.append({
+                    "input": item,
+                    "error": f"upstream annotation source error: {exc}",
+                })
+        return curate_fusion_genes(params.fusions, annotation_results=annotation_results)
     except GeneCurationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except requests.exceptions.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"upstream annotation source error: {exc}") from exc
 
 
 if __name__ == "__main__":
