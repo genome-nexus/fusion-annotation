@@ -118,6 +118,16 @@ export interface AnnotationResult {
   warnings: string[];
 }
 
+export interface BatchAnnotationItemResult {
+  input: AnnotateParams;
+  result: AnnotationResult | null;
+  error: string | null;
+}
+
+export interface BatchAnnotationResponse {
+  results: BatchAnnotationItemResult[];
+}
+
 // The inputs a caller supplies — mirrors AnnotateRequest in api/app.py, and is
 // exactly what gets encoded into the permalink's URL query string.
 export interface AnnotateParams {

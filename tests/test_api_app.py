@@ -9,6 +9,8 @@ import importlib.util
 import json
 import os
 import sys
+from time import monotonic
+from time import sleep
 
 import pytest
 
@@ -161,10 +163,45 @@ def test_annotate_batch_reuses_provider_by_species_and_build(monkeypatch):
         "mus_musculus:GRCm39",
         "homo_sapiens:GRCh38",
     ]
-    assert calls == [
+    assert set(calls) == {
         ("homo_sapiens", "GRCh38"),
         ("mus_musculus", "GRCm39"),
+    }
+
+
+def test_annotate_batch_runs_rows_in_parallel(monkeypatch):
+    monkeypatch.setenv("FUSION_ANNOTATION_BATCH_WORKERS", "3")
+    monkeypatch.setattr(api_app, "make_provider", lambda species, assembly: object())
+
+    def slow_annotate_with_provider(provider, params):
+        sleep(0.12)
+        return {
+            "interface": {"categorical_key": f"{params.five_gene}::{params.three_gene}"},
+            "knowledge": {},
+            "resolved": {},
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(api_app, "_annotate_with_provider", slow_annotate_with_provider)
+
+    test_client = TestClient(api_app.app)
+    started = monotonic()
+    r = test_client.post("/api/annotate/batch", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20},
+            {"five_gene": "BCR", "three_gene": "ABL1", "five_exon": 13, "three_exon": 2},
+            {"five_gene": "CD74", "three_gene": "ROS1", "five_exon": 6, "three_exon": 34},
+        ]
+    })
+    elapsed = monotonic() - started
+
+    assert r.status_code == 200
+    assert [item["result"]["interface"]["categorical_key"] for item in r.json()["results"]] == [
+        "EML4::ALK",
+        "BCR::ABL1",
+        "CD74::ROS1",
     ]
+    assert elapsed < 0.3
 
 
 def test_annotate_missing_required_field(client):
