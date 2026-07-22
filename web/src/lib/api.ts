@@ -120,6 +120,7 @@ export async function getGeneCurationStatus(signal?: AbortSignal): Promise<GeneC
 export async function curateFusionGenes(
   fusions: AnnotateParams[],
   forceGeneCuration = false,
+  genes?: string[],
   signal?: AbortSignal,
 ): Promise<GeneCurationResponse> {
   const response = await fetch(`${API_BASE_URL}/api/gene-curation`, {
@@ -128,6 +129,7 @@ export async function curateFusionGenes(
     body: JSON.stringify({
       fusions: fusions.map(cleanAnnotateParams),
       force_gene_curation: forceGeneCuration,
+      genes: genes ?? [],
     }),
     signal,
   });

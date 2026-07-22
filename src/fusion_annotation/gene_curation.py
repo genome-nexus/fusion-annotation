@@ -1526,6 +1526,7 @@ def curate_fusion_genes(
     annotation_results: Optional[Iterable[dict]] = None,
     *,
     force_gene_curation: bool = False,
+    requested_genes: Optional[Iterable[str]] = None,
 ) -> dict:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_api_key:
@@ -1542,6 +1543,11 @@ def curate_fusion_genes(
     max_workers = max(1, int(os.environ.get("FUSION_GENE_CURATION_WORKERS", "3")))
     fusion_results = []
     results = []
+    requested_gene_set = {
+        str(gene).strip().upper()
+        for gene in (requested_genes or [])
+        if str(gene).strip()
+    }
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         fusion_futures = {
@@ -1589,6 +1595,8 @@ def curate_fusion_genes(
                 if context.gene not in seen_genes:
                     seen_genes.add(context.gene)
                     genes.append(context.gene)
+    if requested_gene_set:
+        genes = [gene for gene in genes if gene.upper() in requested_gene_set]
 
     oncokb_lookup_error = None
     oncokb_token = _oncokb_api_token()

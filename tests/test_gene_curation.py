@@ -1104,3 +1104,37 @@ def test_curate_fusion_genes_force_gene_calls_when_requested(monkeypatch):
 
     assert called_genes == ["LMNA", "NTRK1"]
     assert [item["gene"] for item in result["genes"]] == ["LMNA", "NTRK1"]
+
+
+def test_curate_fusion_genes_filters_requested_genes(monkeypatch):
+    class Fusion:
+        five_gene = "LMNA"
+        three_gene = "NTRK1"
+
+    called_genes = []
+
+    def fake_curate_fusion(fusion, **kwargs):
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": True,
+            "supporting_pmids": ["1"],
+            "insufficient_evidence": False,
+        }
+
+    def fake_curate_gene(gene, **kwargs):
+        called_genes.append(gene)
+        return {"gene": gene, "insufficient_evidence": True}
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
+    monkeypatch.setattr(gene_curation, "curate_gene", fake_curate_gene)
+
+    result = gene_curation.curate_fusion_genes(
+        [Fusion()],
+        force_gene_curation=True,
+        requested_genes=["NTRK1"],
+    )
+
+    assert called_genes == ["NTRK1"]
+    assert [item["gene"] for item in result["genes"]] == ["NTRK1"]

@@ -222,10 +222,16 @@ def test_gene_curation_status_reports_disabled_without_key(client, monkeypatch):
 def test_gene_curation_uses_server_side_service(client, monkeypatch):
     seen = {}
 
-    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
+    def fake_curate_fusion_genes(
+        fusions,
+        annotation_results=None,
+        force_gene_curation=False,
+        requested_genes=None,
+    ):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
         seen["force_gene_curation"] = force_gene_curation
+        seen["requested_genes"] = requested_genes
         return {
             "fusions": [],
             "genes": [
@@ -252,16 +258,23 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
     assert seen["fusions"][0].five_gene == "EML4"
     assert seen["annotation_results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
     assert seen["force_gene_curation"] is False
+    assert seen["requested_genes"] == []
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
 def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
     seen = {}
 
-    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
+    def fake_curate_fusion_genes(
+        fusions,
+        annotation_results=None,
+        force_gene_curation=False,
+        requested_genes=None,
+    ):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
         seen["force_gene_curation"] = force_gene_curation
+        seen["requested_genes"] = requested_genes
         return {
             "fusions": [],
             "genes": [
@@ -290,9 +303,54 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
     assert seen["fusions"][0].five_exon is None
     assert seen["fusions"][0].three_exon is None
     assert seen["force_gene_curation"] is False
+    assert seen["requested_genes"] == []
     assert seen["annotation_results"][0]["result"]["interface"]["frame_status"] == "unknown"
     assert seen["annotation_results"][0].get("error") is None
     assert r.json()["genes"][0]["gene"] == "ROS1"
+
+
+def test_gene_curation_accepts_requested_genes(client, monkeypatch):
+    seen = {}
+
+    def fake_curate_fusion_genes(
+        fusions,
+        annotation_results=None,
+        force_gene_curation=False,
+        requested_genes=None,
+    ):
+        seen["fusions"] = fusions
+        seen["annotation_results"] = annotation_results
+        seen["force_gene_curation"] = force_gene_curation
+        seen["requested_genes"] = requested_genes
+        return {
+            "fusions": [],
+            "genes": [
+                {
+                    "gene": "ALK",
+                    "cancer_associated": True,
+                    "rationale": "ALK details.",
+                    "supporting_pmids": [],
+                    "retrieved_pmids": [],
+                    "fusion_contexts": [],
+                    "insufficient_evidence": False,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(api_app, "curate_fusion_genes", fake_curate_fusion_genes)
+
+    r = client.post("/api/gene-curation", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20}
+        ],
+        "force_gene_curation": True,
+        "genes": ["ALK"],
+    })
+
+    assert r.status_code == 200
+    assert seen["force_gene_curation"] is True
+    assert seen["requested_genes"] == ["ALK"]
+    assert r.json()["genes"][0]["gene"] == "ALK"
 
 
 def test_gene_curation_ui_uses_reviewer_facing_badges():
@@ -317,6 +375,8 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "Rationale Supporting PMIDs" in result_view_tsx
     assert "Get fusion info" in result_view_tsx
     assert "Get gene details" in result_view_tsx
+    assert "Refresh gene details" in result_view_tsx
+    assert "onCurateGene" in result_view_tsx
     assert "fusion_gene_curation.csv" in app_tsx
     assert ".workflow-tabs" in styles
     assert ".batch-review-layout" in styles

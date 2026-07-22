@@ -23,6 +23,7 @@ interface Props {
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
   onForceGeneCuration?: () => void;
+  onCurateGene?: (gene: string) => void;
   onExportGeneCurationCsv?: () => void;
 }
 
@@ -270,6 +271,7 @@ function GeneInformationSection({
   geneCurationError = null,
   onCurateGenes,
   onForceGeneCuration,
+  onCurateGene,
   onExportGeneCurationCsv,
 }: {
   result: AnnotationResult;
@@ -280,6 +282,7 @@ function GeneInformationSection({
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
   onForceGeneCuration?: () => void;
+  onCurateGene?: (gene: string) => void;
   onExportGeneCurationCsv?: () => void;
 }) {
   const genes = [
@@ -438,6 +441,20 @@ function GeneInformationSection({
                     ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
                     : "No gene details loaded"}
                 </span>
+                {onCurateGene && (
+                  <button
+                    type="button"
+                    className="secondary-button gene-info-summary-action"
+                    disabled={!geneCurationEnabled || geneCurationLoading}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onCurateGene(gene);
+                    }}
+                  >
+                    {item ? "Refresh gene details" : "Get gene details"}
+                  </button>
+                )}
               </summary>
               {item ? (
                 item.error ? (
@@ -549,6 +566,7 @@ export function ResultView({
   geneCurationError,
   onCurateGenes,
   onForceGeneCuration,
+  onCurateGene,
   onExportGeneCurationCsv,
 }: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
@@ -711,6 +729,7 @@ export function ResultView({
         geneCurationError={geneCurationError}
         onCurateGenes={onCurateGenes}
         onForceGeneCuration={onForceGeneCuration}
+        onCurateGene={onCurateGene}
         onExportGeneCurationCsv={onExportGeneCurationCsv}
       />
 

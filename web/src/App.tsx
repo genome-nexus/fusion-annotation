@@ -190,6 +190,48 @@ function downloadText(filename: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+function mergeFusionCurationResults(
+  current: GeneCurationFusionResult[] | null,
+  incoming: GeneCurationFusionResult[],
+) {
+  const byFusion = new Map((current || []).map((item) => [item.fusion, item]));
+  for (const item of incoming) {
+    byFusion.set(item.fusion, item);
+  }
+  return Array.from(byFusion.values());
+}
+
+function contextKey(context: NonNullable<GeneCurationGeneResult["fusion_contexts"]>[number]) {
+  return `${context.fusion}|${context.side}|${context.partner_gene}`;
+}
+
+function mergeGeneCurationResults(
+  current: GeneCurationGeneResult[] | null,
+  incoming: GeneCurationGeneResult[],
+) {
+  const byGene = new Map((current || []).map((item) => [item.gene.toUpperCase(), item]));
+  for (const item of incoming) {
+    const key = item.gene.toUpperCase();
+    const existing = byGene.get(key);
+    if (!existing) {
+      byGene.set(key, item);
+      continue;
+    }
+    const contexts = new Map(
+      (existing.fusion_contexts || []).map((context) => [contextKey(context), context]),
+    );
+    for (const context of item.fusion_contexts || []) {
+      contexts.set(contextKey(context), context);
+    }
+    byGene.set(key, {
+      ...existing,
+      ...item,
+      fusion_contexts: Array.from(contexts.values()),
+    });
+  }
+  return Array.from(byGene.values());
+}
+
 type AppTab = "single" | "batch";
 
 function App() {
@@ -308,23 +350,35 @@ function App() {
     }
   }, []);
 
-  const runGeneCuration = useCallback(async (fusions: AnnotateParams[], forceGeneCuration = false) => {
+  const runGeneCuration = useCallback(async (
+    fusions: AnnotateParams[],
+    forceGeneCuration = false,
+    genes?: string[],
+  ) => {
     activeCurationRequest.current?.abort();
     const controller = new AbortController();
     activeCurationRequest.current = controller;
     const requestId = curationRequestSequence.current + 1;
     curationRequestSequence.current = requestId;
+    const shouldMerge = Boolean(genes?.length);
 
     setCurationLoading(true);
     setCurationError(null);
-    setFusionCurationResults(null);
-    setGeneCurationResults(null);
+    if (!shouldMerge) {
+      setFusionCurationResults(null);
+      setGeneCurationResults(null);
+    }
 
     try {
-      const response = await curateFusionGenes(fusions, forceGeneCuration, controller.signal);
+      const response = await curateFusionGenes(fusions, forceGeneCuration, genes, controller.signal);
       if (curationRequestSequence.current !== requestId) return;
-      setFusionCurationResults(response.fusions || []);
-      setGeneCurationResults(response.genes);
+      if (shouldMerge) {
+        setFusionCurationResults((current) => mergeFusionCurationResults(current, response.fusions || []));
+        setGeneCurationResults((current) => mergeGeneCurationResults(current, response.genes));
+      } else {
+        setFusionCurationResults(response.fusions || []);
+        setGeneCurationResults(response.genes);
+      }
     } catch (err) {
       if (controller.signal.aborted || curationRequestSequence.current !== requestId) return;
       setCurationError(err as ApiError);
@@ -458,6 +512,7 @@ function App() {
           geneCurationError={curationError}
           onCurateGenes={() => runGeneCuration([formValues])}
           onForceGeneCuration={() => runGeneCuration([formValues], true)}
+          onCurateGene={(gene) => runGeneCuration([formValues], true, [gene])}
           onExportGeneCurationCsv={exportGeneCurationCsv}
         />
       )}
@@ -506,6 +561,7 @@ function App() {
                   geneCurationError={curationError}
                   onCurateGenes={() => runGeneCuration(batchInputs)}
                   onForceGeneCuration={() => runGeneCuration(batchInputs, true)}
+                  onCurateGene={(gene) => runGeneCuration([selectedBatchItem.input], true, [gene])}
                   onExportGeneCurationCsv={exportGeneCurationCsv}
                 />
               )}
