@@ -205,6 +205,10 @@ function confidenceLabel(item?: GeneCurationGeneResult | GeneCurationFusionResul
   return "Uncertain";
 }
 
+function confidenceHelpText() {
+  return "Evidence sufficiency for reviewer triage; not a formal oncogenicity probability, tier, or evidence level.";
+}
+
 function renderFusionContext(context: GeneFusionCurationContext) {
   const breakpoint = context.side === "five_prime"
     ? {
@@ -219,6 +223,16 @@ function renderFusionContext(context: GeneFusionCurationContext) {
         genomic: context.three_genomic,
         protein: context.three_protein_breakpoint,
       };
+  const domainText = [
+    `retained: ${formatDomainList(context.retained_domains)}`,
+    `lost/disrupted: ${formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}`,
+  ].join(" · ");
+  const hasDomainContext = Boolean(
+    context.retained_domains?.length
+      || context.lost_domains?.length
+      || context.disrupted_domains?.length,
+  );
+  const hasKinaseContext = Boolean(context.kinase_gene || context.kinase_domain_status);
   return (
     <div className="fusion-curation-context" key={`${context.gene}-${context.fusion}-${context.side}`}>
       <div className="fusion-curation-context-title">
@@ -238,15 +252,20 @@ function renderFusionContext(context: GeneFusionCurationContext) {
           tx {breakpoint.transcript || "unknown"} · exon {breakpoint.exon || "unknown"} · genomic{" "}
           {breakpoint.genomic || "unknown"} · protein {breakpoint.protein || "unknown"}
         </dd>
-        <dt>Domains</dt>
-        <dd>
-          retained: {formatDomainList(context.retained_domains)} · lost/disrupted:{" "}
-          {formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}
-        </dd>
-        <dt>Kinase</dt>
-        <dd>
-          {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
-        </dd>
+        {hasDomainContext && (
+          <>
+            <dt>Literature-referenced domains</dt>
+            <dd>{domainText}</dd>
+          </>
+        )}
+        {hasKinaseContext && (
+          <>
+            <dt>Literature-referenced kinase context</dt>
+            <dd>
+              {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
+            </dd>
+          </>
+        )}
       </dl>
       {context.limitations && context.limitations.length > 0 && (
         <ul className="fusion-curation-limitations">
@@ -347,7 +366,7 @@ function GeneInformationSection({
             <span className="gene-info-symbol">{result.interface.categorical_key}</span>
             <span className="gene-info-summary">
               {fusionItem
-                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · confidence ${confidenceLabel(fusionItem)}`
+                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · curation confidence ${confidenceLabel(fusionItem)}`
                 : "No fusion-specific literature curation loaded"}
             </span>
           </summary>
@@ -374,8 +393,11 @@ function GeneInformationSection({
                   <dd>
                     {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
                   </dd>
-                  <dt>Confidence</dt>
-                  <dd>{confidenceLabel(fusionItem)}</dd>
+                  <dt>Curation confidence</dt>
+                  <dd title={confidenceHelpText()}>
+                    {confidenceLabel(fusionItem)}
+                    <span className="field-help"> {confidenceHelpText()}</span>
+                  </dd>
                   <dt>Rationale</dt>
                   <dd>{fusionItem.rationale || "No rationale returned."}</dd>
                 </dl>
@@ -438,7 +460,7 @@ function GeneInformationSection({
                 <span className="gene-info-symbol">{gene}</span>
                 <span className="gene-info-summary">
                   {item
-                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
+                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · curation confidence ${confidenceLabel(item)}`
                     : "No gene details loaded"}
                 </span>
                 {onCurateGene && (
@@ -508,8 +530,11 @@ function GeneInformationSection({
                       )}
                       <dt>Known driver signal</dt>
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
-                      <dt>Confidence</dt>
-                      <dd>{confidenceLabel(item)}</dd>
+                      <dt>Curation confidence</dt>
+                      <dd title={confidenceHelpText()}>
+                        {confidenceLabel(item)}
+                        <span className="field-help"> {confidenceHelpText()}</span>
+                      </dd>
                       <dt>Rationale</dt>
                       <dd>{item.rationale || "No rationale returned."}</dd>
                       <dt>Fusion knowledge</dt>

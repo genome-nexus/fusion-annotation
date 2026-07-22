@@ -879,6 +879,72 @@ def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):
     assert "ENST00000389048" in seen["prompt"]
     assert "domain_status=retained" in seen["prompt"]
     assert result["fusion_contexts"][0]["fusion"] == "EML4::ALK"
+    assert result["fusion_contexts"][0]["retained_domains"] == ()
+    assert result["fusion_contexts"][0]["kinase_domain_status"] is None
+
+
+def test_curate_gene_returns_domain_context_only_when_literature_references_it(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"The literature describes retained ALK kinase domain signaling.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        fusion_contexts=[context],
+    )
+
+    returned_context = result["fusion_contexts"][0]
+    assert returned_context["retained_domains"] == ("Protein kinase domain (1116-1383)",)
+    assert returned_context["kinase_gene"] == "ALK"
+    assert returned_context["kinase_domain_status"] == "retained"
 
 
 def test_fusion_context_marks_gene_pair_only_when_annotation_unavailable():

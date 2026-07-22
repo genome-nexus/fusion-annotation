@@ -648,8 +648,44 @@ def fusion_contexts_by_fusion(
     return contexts
 
 
-def _context_dicts(contexts: list[FusionCurationContext]) -> list[dict]:
-    return [asdict(context) for context in contexts]
+def _context_dicts(
+    contexts: list[FusionCurationContext],
+    *,
+    include_domain_context: bool = True,
+) -> list[dict]:
+    items = []
+    for context in contexts:
+        item = asdict(context)
+        if not include_domain_context:
+            item["retained_domains"] = ()
+            item["lost_domains"] = ()
+            item["disrupted_domains"] = ()
+            item["kinase_gene"] = None
+            item["kinase_gene_side"] = None
+            item["kinase_domain_status"] = None
+        items.append(item)
+    return items
+
+
+def _payload_references_domain_context(payload: dict) -> bool:
+    text = " ".join(
+        str(payload.get(key) or "")
+        for key in ("rationale", "oncokb_summary", "oncokb_background")
+    ).lower()
+    if not text:
+        return False
+    domain_terms = (
+        "domain",
+        "kinase",
+        "retained",
+        "retention",
+        "lost ",
+        "loss ",
+        "disrupted",
+        "oligomerization",
+        "dimerization",
+    )
+    return any(term in text for term in domain_terms)
 
 
 def _strip_markdown_json_fence(text: str) -> str:
@@ -1145,13 +1181,12 @@ def _oncokb_gene_result(
     if levels:
         rationale_parts.append(f"OncoKB reports {', '.join(levels)}.")
 
-    return {
+    result = {
         "gene": gene,
         "cancer_associated": _oncokb_cancer_association(gene_type),
         "rationale": _truncate_at_sentence(" ".join(rationale_parts)),
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts),
         "insufficient_evidence": gene_type == "INSUFFICIENT_EVIDENCE" and not summary and not background,
         "curation_source": "OncoKB",
         "oncokb_gene_type": gene_type,
@@ -1161,6 +1196,11 @@ def _oncokb_gene_result(
         "oncokb_highest_resistance_level": highest_resistance,
         "oncokb_url": f"https://www.oncokb.org/gene/{gene}",
     }
+    result["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_references_domain_context(result),
+    )
+    return result
 
 
 def _curation_cache_key(
@@ -1217,7 +1257,7 @@ def _no_pubmed_evidence_result(
         "rationale": "No PubMed abstracts were retrieved for this gene.",
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts or []),
+        "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
         "insufficient_evidence": True,
     }
 
@@ -1233,7 +1273,7 @@ def _no_fusion_pubmed_evidence_result(
         "rationale": "No PubMed abstracts were retrieved for this exact fusion.",
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts or []),
+        "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
         "insufficient_evidence": True,
     }
 
@@ -1333,7 +1373,10 @@ def curate_gene(
         cached = _repair_json_rationale(cached)
         cached.setdefault("gene", gene)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
-        cached["fusion_contexts"] = _context_dicts(fusion_contexts)
+        cached["fusion_contexts"] = _context_dicts(
+            fusion_contexts,
+            include_domain_context=_payload_references_domain_context(cached),
+        )
         cached.setdefault("curation_source", "PubMed + LLM")
         return cached
 
@@ -1401,7 +1444,10 @@ junction, retained/lost domains, or kinase-domain retention.
     payload = _repair_json_rationale(payload)
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
-    payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_references_domain_context(payload),
+    )
     payload.setdefault("curation_source", "PubMed + LLM")
     _write_cache("gene-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload
@@ -1443,7 +1489,10 @@ def curate_fusion(
         cached = _repair_json_rationale(cached)
         cached.setdefault("fusion", fusion)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
-        cached["fusion_contexts"] = _context_dicts(fusion_contexts)
+        cached["fusion_contexts"] = _context_dicts(
+            fusion_contexts,
+            include_domain_context=_payload_references_domain_context(cached),
+        )
         return cached
 
     context = "\n\n".join(
@@ -1508,7 +1557,10 @@ kinase-domain status beyond the Genome Nexus context.
     payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
-    payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_references_domain_context(payload),
+    )
     _write_cache("fusion-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload
 
@@ -1575,7 +1627,10 @@ def curate_fusion_genes(
                     "insufficient_evidence": True,
                     "supporting_pmids": [],
                     "retrieved_pmids": [],
-                    "fusion_contexts": _context_dicts(contexts_by_fusion.get(fusion, [])),
+                    "fusion_contexts": _context_dicts(
+                        contexts_by_fusion.get(fusion, []),
+                        include_domain_context=False,
+                    ),
                 })
 
     sufficient_fusions = {
@@ -1616,7 +1671,10 @@ def curate_fusion_genes(
                 "insufficient_evidence": True,
                 "supporting_pmids": [],
                 "retrieved_pmids": [],
-                "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                "fusion_contexts": _context_dicts(
+                    contexts_by_gene.get(gene, []),
+                    include_domain_context=False,
+                ),
                 "curation_source": "OncoKB",
             })
         results.sort(key=lambda item: item.get("gene", ""))
@@ -1650,7 +1708,10 @@ def curate_fusion_genes(
                     "insufficient_evidence": True,
                     "supporting_pmids": [],
                     "retrieved_pmids": [],
-                    "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                    "fusion_contexts": _context_dicts(
+                        contexts_by_gene.get(gene, []),
+                        include_domain_context=False,
+                    ),
                 })
 
     results.sort(key=lambda item: item.get("gene", ""))

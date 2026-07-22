@@ -512,6 +512,13 @@ header .tagline {
   padding: 6px 10px;
 }
 
+.field-help {
+  color: #6c757d;
+  display: block;
+  font-size: 0.82rem;
+  margin-top: 3px;
+}
+
 .gene-info-body {
   border-top: 1px solid #edf2f7;
   padding: 12px 14px 14px;
