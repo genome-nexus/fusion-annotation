@@ -21,6 +21,7 @@ import requests
 
 ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+DEFAULT_ONCOKB_API_BASE_URL = "https://www.oncokb.org/api/v1"
 DEFAULT_CURATION_MODEL = "claude-haiku-4-5-20251001"
 
 
@@ -63,6 +64,10 @@ class GeneCurationUnavailable(RuntimeError):
 
 class PubMedRateLimitError(RuntimeError):
     """Raised when NCBI keeps rejecting PubMed retrieval for rate limiting."""
+
+
+class OncoKBGeneLookupError(RuntimeError):
+    """Raised when OncoKB curated-gene lookup fails."""
 
 
 @dataclass
@@ -495,6 +500,132 @@ def retrieve_pubmed_records(
     )
 
 
+def _oncokb_api_token() -> str:
+    return os.environ.get("ONCOKB_API_TOKEN", "") or os.environ.get("ONCOKB_TOKEN", "")
+
+
+def fetch_oncokb_curated_gene_index(api_token: str = "") -> dict[str, dict]:
+    if not api_token:
+        return {}
+
+    base_url = os.environ.get("ONCOKB_API_BASE_URL", DEFAULT_ONCOKB_API_BASE_URL).rstrip("/")
+    params = {"includeEvidence": "true"}
+    version = os.environ.get("ONCOKB_DATA_VERSION")
+    if version:
+        params["version"] = version
+
+    response = requests.get(
+        f"{base_url}/utils/allCuratedGenes",
+        params=params,
+        headers={
+            "accept": "application/json",
+            "Authorization": f"Bearer {api_token}",
+        },
+        timeout=30,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        raise OncoKBGeneLookupError("OncoKB curated-gene lookup failed.") from exc
+
+    data = response.json()
+    if not isinstance(data, list):
+        raise OncoKBGeneLookupError("OncoKB curated-gene lookup returned an unexpected response.")
+
+    genes = {}
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        symbol = str(item.get("hugoSymbol") or "").strip().upper()
+        if symbol:
+            genes[symbol] = item
+    return genes
+
+
+def _clean_oncokb_text(value: object) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _truncate_at_sentence(text: str, max_chars: int = 420) -> str:
+    if len(text) <= max_chars:
+        return text
+    clipped = text[:max_chars].rsplit(" ", 1)[0].strip()
+    for marker in (". ", "; "):
+        sentence = clipped.rsplit(marker, 1)[0].strip()
+        if len(sentence) >= 80:
+            return f"{sentence}."
+    return f"{clipped.rstrip('.')}."
+
+
+def _oncokb_gene_type_label(gene_type: str) -> str:
+    labels = {
+        "ONCOGENE_AND_TSG": "oncogene and tumor suppressor",
+        "ONCOGENE": "oncogene",
+        "TSG": "tumor suppressor",
+        "INSUFFICIENT_EVIDENCE": "a gene with insufficient cancer-gene evidence",
+        "NEITHER": "neither an oncogene nor tumor suppressor",
+    }
+    return labels.get(gene_type, gene_type.replace("_", " ").lower() or "a curated gene")
+
+
+def _oncokb_cancer_association(gene_type: str) -> Optional[bool]:
+    if gene_type in {"ONCOGENE_AND_TSG", "ONCOGENE", "TSG"}:
+        return True
+    if gene_type == "NEITHER":
+        return False
+    return None
+
+
+def _oncokb_gene_result(
+    gene: str,
+    record: Optional[dict],
+    fusion_contexts: list[FusionCurationContext],
+) -> Optional[dict]:
+    if not record:
+        return None
+
+    gene_type = str(record.get("geneType") or "").strip().upper()
+    summary = _clean_oncokb_text(record.get("summary"))
+    background = _clean_oncokb_text(record.get("background"))
+    highest_sensitive = _clean_oncokb_text(record.get("highestSensitiveLevel"))
+    highest_resistance = _clean_oncokb_text(
+        record.get("highestResistanceLevel") or record.get("highestResistancLevel")
+    )
+    if not any([gene_type, summary, background, highest_sensitive, highest_resistance]):
+        return None
+
+    label = _oncokb_gene_type_label(gene_type)
+    rationale_parts = [f"OncoKB curates {gene} as {label}."]
+    if summary:
+        rationale_parts.append(summary)
+    elif background:
+        rationale_parts.append(background)
+    levels = []
+    if highest_sensitive:
+        levels.append(f"highest sensitive level {highest_sensitive}")
+    if highest_resistance:
+        levels.append(f"highest resistance level {highest_resistance}")
+    if levels:
+        rationale_parts.append(f"OncoKB reports {', '.join(levels)}.")
+
+    return {
+        "gene": gene,
+        "cancer_associated": _oncokb_cancer_association(gene_type),
+        "rationale": _truncate_at_sentence(" ".join(rationale_parts)),
+        "supporting_pmids": [],
+        "retrieved_pmids": [],
+        "fusion_contexts": _context_dicts(fusion_contexts),
+        "insufficient_evidence": gene_type == "INSUFFICIENT_EVIDENCE" and not summary and not background,
+        "curation_source": "OncoKB",
+        "oncokb_gene_type": gene_type,
+        "oncokb_summary": summary,
+        "oncokb_background": background,
+        "oncokb_highest_sensitive_level": highest_sensitive,
+        "oncokb_highest_resistance_level": highest_resistance,
+        "oncokb_url": f"https://www.oncokb.org/gene/{gene}",
+    }
+
+
 def _no_pubmed_evidence_result(
     gene: str,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
@@ -586,11 +717,20 @@ def curate_gene(
     max_results: int = 8,
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
+    oncokb_genes_by_symbol: Optional[dict[str, dict]] = None,
 ) -> dict:
+    fusion_contexts = fusion_contexts or []
+    oncokb_result = _oncokb_gene_result(
+        gene,
+        (oncokb_genes_by_symbol or {}).get(gene.upper()),
+        fusion_contexts,
+    )
+    if oncokb_result:
+        return oncokb_result
+
     if not anthropic_api_key:
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
 
-    fusion_contexts = fusion_contexts or []
     records = retrieve_pubmed_records(
         gene,
         ncbi_api_key=ncbi_api_key,
@@ -666,6 +806,7 @@ junction, retained/lost domains, or kinase-domain retention.
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload.setdefault("curation_source", "PubMed + LLM")
     return payload
 
 
@@ -838,6 +979,31 @@ def curate_fusion_genes(
                     seen_genes.add(context.gene)
                     genes.append(context.gene)
 
+    oncokb_lookup_error = None
+    oncokb_token = _oncokb_api_token()
+    oncokb_genes_by_symbol = {}
+    if genes:
+        try:
+            oncokb_genes_by_symbol = fetch_oncokb_curated_gene_index(oncokb_token)
+        except OncoKBGeneLookupError as exc:
+            if oncokb_token:
+                oncokb_lookup_error = str(exc)
+
+    if oncokb_lookup_error:
+        for gene in genes:
+            results.append({
+                "gene": gene,
+                "error": oncokb_lookup_error,
+                "insufficient_evidence": True,
+                "supporting_pmids": [],
+                "retrieved_pmids": [],
+                "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                "curation_source": "OncoKB",
+            })
+        results.sort(key=lambda item: item.get("gene", ""))
+        fusion_results.sort(key=lambda item: item.get("fusion", ""))
+        return {"fusions": fusion_results, "genes": results}
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(
@@ -850,6 +1016,7 @@ def curate_fusion_genes(
                 max_results=max_results,
                 abstract_chars=abstract_chars,
                 fusion_contexts=contexts_by_gene.get(gene, []),
+                oncokb_genes_by_symbol=oncokb_genes_by_symbol,
             ): gene
             for gene in genes
         }

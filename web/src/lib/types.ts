@@ -166,6 +166,13 @@ export interface GeneCurationGeneResult {
   retrieved_pmids?: string[];
   fusion_contexts?: GeneFusionCurationContext[];
   insufficient_evidence?: boolean;
+  curation_source?: string;
+  oncokb_gene_type?: string;
+  oncokb_summary?: string;
+  oncokb_background?: string;
+  oncokb_highest_sensitive_level?: string;
+  oncokb_highest_resistance_level?: string;
+  oncokb_url?: string;
   error?: string;
 }
 

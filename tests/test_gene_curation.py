@@ -177,6 +177,82 @@ def test_curate_gene_skips_model_when_pubmed_is_empty(monkeypatch):
     }
 
 
+def test_curate_gene_uses_oncokb_before_pubmed_or_model(monkeypatch):
+    def fake_retrieve_pubmed_records(*args, **kwargs):
+        raise AssertionError("PubMed should not be queried when OncoKB has a curated gene record")
+
+    monkeypatch.setattr(gene_curation, "retrieve_pubmed_records", fake_retrieve_pubmed_records)
+    monkeypatch.setitem(sys.modules, "anthropic", None)
+
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="",
+        oncokb_genes_by_symbol={
+            "ALK": {
+                "hugoSymbol": "ALK",
+                "geneType": "ONCOGENE",
+                "summary": "ALK is a receptor tyrosine kinase altered in multiple cancers.",
+                "highestSensitiveLevel": "LEVEL_1",
+            }
+        },
+    )
+
+    assert result["curation_source"] == "OncoKB"
+    assert result["cancer_associated"] is True
+    assert result["oncokb_gene_type"] == "ONCOGENE"
+    assert result["oncokb_highest_sensitive_level"] == "LEVEL_1"
+    assert result["supporting_pmids"] == []
+    assert "OncoKB curates ALK as oncogene" in result["rationale"]
+
+
+def test_curate_fusion_genes_fetches_oncokb_once_for_gene_fallback(monkeypatch):
+    class Fusion:
+        five_gene = "EML4"
+        three_gene = "ALK"
+
+    calls = 0
+
+    def fake_fetch_oncokb_curated_gene_index(api_token):
+        nonlocal calls
+        calls += 1
+        assert api_token == "oncokb-token"
+        return {
+            "EML4": {
+                "hugoSymbol": "EML4",
+                "geneType": "NEITHER",
+                "summary": "EML4 is curated by OncoKB.",
+            },
+            "ALK": {
+                "hugoSymbol": "ALK",
+                "geneType": "ONCOGENE",
+                "summary": "ALK is a receptor tyrosine kinase altered in cancer.",
+            },
+        }
+
+    def fake_curate_fusion(fusion, **kwargs):
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": False,
+            "insufficient_evidence": True,
+        }
+
+    def fake_retrieve_pubmed_records(*args, **kwargs):
+        raise AssertionError("PubMed should not be queried when OncoKB covers fallback genes")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("ONCOKB_API_TOKEN", "oncokb-token")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
+    monkeypatch.setattr(gene_curation, "fetch_oncokb_curated_gene_index", fake_fetch_oncokb_curated_gene_index)
+    monkeypatch.setattr(gene_curation, "retrieve_pubmed_records", fake_retrieve_pubmed_records)
+
+    result = gene_curation.curate_fusion_genes([Fusion()])
+
+    assert calls == 1
+    assert [item["gene"] for item in result["genes"]] == ["ALK", "EML4"]
+    assert [item["curation_source"] for item in result["genes"]] == ["OncoKB", "OncoKB"]
+
+
 def test_curate_gene_parses_json_wrapped_in_markdown_fence(monkeypatch):
     monkeypatch.setattr(
         gene_curation,

@@ -453,6 +453,43 @@ function GeneInformationSection({
                       ))}
                     </div>
                     <dl className="gene-curation-fields">
+                      {item.curation_source && (
+                        <>
+                          <dt>Source</dt>
+                          <dd>{item.curation_source}</dd>
+                        </>
+                      )}
+                      {item.oncokb_gene_type && (
+                        <>
+                          <dt>OncoKB gene type</dt>
+                          <dd>{item.oncokb_gene_type.replaceAll("_", " ").toLowerCase()}</dd>
+                        </>
+                      )}
+                      {(item.oncokb_highest_sensitive_level || item.oncokb_highest_resistance_level) && (
+                        <>
+                          <dt>OncoKB evidence levels</dt>
+                          <dd>
+                            {[
+                              item.oncokb_highest_sensitive_level
+                                ? `Sensitive ${item.oncokb_highest_sensitive_level}`
+                                : "",
+                              item.oncokb_highest_resistance_level
+                                ? `Resistance ${item.oncokb_highest_resistance_level}`
+                                : "",
+                            ].filter(Boolean).join("; ")}
+                          </dd>
+                        </>
+                      )}
+                      {item.oncokb_url && (
+                        <>
+                          <dt>OncoKB page</dt>
+                          <dd>
+                            <a href={item.oncokb_url} target="_blank" rel="noopener noreferrer">
+                              {item.oncokb_url}
+                            </a>
+                          </dd>
+                        </>
+                      )}
                       <dt>Known driver signal</dt>
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
                       <dt>Confidence</dt>

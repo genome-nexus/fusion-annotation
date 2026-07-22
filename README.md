@@ -426,17 +426,23 @@ skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
 per-gene override when deeper review is needed. When exact-fusion literature is
 sparse, the two involved gene sections can be expanded to review gene-level
 driver signal, confidence label, rationale, supporting PMIDs, and retrieved
-PMIDs. Batch results are reviewed from a selectable list; choosing a completed
-row opens the same result view used by the single-fusion workflow.
+PMIDs. Gene-level curation checks OncoKB first via the curated-gene list and
+uses the OncoKB gene type, summary/background, and highest evidence levels when
+available. That avoids PubMed retrieval and LLM synthesis for genes already
+covered by OncoKB. PubMed/LLM gene synthesis is only used when an OncoKB token
+is not configured or the gene is not informative in OncoKB. Batch results are
+reviewed from a selectable list; choosing a completed row opens the same result
+view used by the single-fusion workflow.
 
-Set `NCBI_API_KEY` in the API environment to use a higher PubMed E-utilities
-rate limit during literature retrieval. Store it as a local `.env` entry or a
-deployment secret; do not commit it. The curation service also throttles PubMed
-requests across parallel gene workers and retries transient NCBI 429/5xx
-responses. `FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS` can be set to tune
-the minimum delay between NCBI requests for a deployment. The default curation
-model is `claude-haiku-4-5-20251001`; set `FUSION_GENE_CURATION_MODEL` to
-override it.
+Set `ONCOKB_API_TOKEN` in the API environment to enable OncoKB-backed per-gene
+curation. Store it as a local `.env` entry or a deployment secret; do not commit
+it. Set `NCBI_API_KEY` to use a higher PubMed E-utilities rate limit during
+fusion-level literature retrieval and PubMed/LLM gene fallback. The curation
+service also throttles PubMed requests across parallel gene workers and retries
+transient NCBI 429/5xx responses.
+`FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS` can be set to tune the minimum
+delay between NCBI requests for a deployment. The default curation model is
+`claude-haiku-4-5-20251001`; set `FUSION_GENE_CURATION_MODEL` to override it.
 
 Run both locally:
 

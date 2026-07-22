@@ -43,6 +43,11 @@ const CURATION_CSV_HEADERS = [
   "gene",
   "fusion",
   "fusion_literature_identified",
+  "curation_source",
+  "oncokb_gene_type",
+  "oncokb_highest_sensitive_level",
+  "oncokb_highest_resistance_level",
+  "oncokb_url",
   "gene_side",
   "partner_gene",
   "breakpoint_context_available",
@@ -92,6 +97,11 @@ function curationCsvRows(
         item.fusion_literature_identified == null
           ? ""
           : item.fusion_literature_identified ? "TRUE" : "FALSE",
+        "PubMed + LLM",
+        "",
+        "",
+        "",
+        "",
         context?.side,
         context?.partner_gene,
         context?.breakpoint_context_available == null
@@ -131,6 +141,11 @@ function curationCsvRows(
         item.gene,
         context?.fusion,
         "",
+        item.curation_source,
+        item.oncokb_gene_type,
+        item.oncokb_highest_sensitive_level,
+        item.oncokb_highest_resistance_level,
+        item.oncokb_url,
         context?.side,
         context?.partner_gene,
         context?.breakpoint_context_available == null

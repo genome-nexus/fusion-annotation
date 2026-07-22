@@ -307,9 +307,11 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "without changing backend schema or tier logic" in result_view_tsx
     assert "breakpoint context unavailable" in result_view_tsx
     assert "fusion_specificity" in app_tsx
+    assert "curation_source" in app_tsx
     assert "fusion-curation-context" in result_view_tsx
     assert "Export curation CSV" in result_view_tsx
     assert "Fusion in literature" in result_view_tsx
+    assert "OncoKB gene type" in result_view_tsx
     assert "Get per-gene info" in result_view_tsx
     assert "fusion_gene_curation.csv" in app_tsx
     assert ".workflow-tabs" in styles
