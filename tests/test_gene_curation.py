@@ -10,6 +10,8 @@ from fusion_annotation.gene_curation import (
 
 def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
     class SearchResponse:
+        status_code = 200
+        headers = {}
         text = ""
 
         def raise_for_status(self):
@@ -19,6 +21,8 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
             return {"esearchresult": {"idlist": ["123"]}}
 
     class FetchResponse:
+        status_code = 200
+        headers = {}
         text = """
         <PubmedArticleSet>
           <PubmedArticle>
@@ -45,6 +49,7 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
         assert url == gene_curation.EFETCH_URL
         return FetchResponse()
 
+    monkeypatch.setenv("FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS", "0")
     monkeypatch.setattr(gene_curation.requests, "get", fake_get)
 
     records = gene_curation.retrieve_pubmed_records("ALK")
@@ -56,6 +61,94 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
             abstract="Kinase domain retained. Functional cancer evidence.",
         )
     ]
+
+
+def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
+    calls = []
+
+    class RateLimitedResponse:
+        status_code = 429
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            raise AssertionError("429 should be retried before raise_for_status")
+
+    class SearchResponse:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"esearchresult": {"idlist": ["123"]}}
+
+    class FetchResponse:
+        status_code = 200
+        headers = {}
+        text = """
+        <PubmedArticleSet>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>123</PMID>
+              <Article>
+                <ArticleTitle>ALK fusion evidence</ArticleTitle>
+                <Abstract>
+                  <AbstractText>ALK fusions are oncogenic.</AbstractText>
+                </Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+        </PubmedArticleSet>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        calls.append(url)
+        if url == gene_curation.ESEARCH_URL and calls.count(gene_curation.ESEARCH_URL) == 1:
+            return RateLimitedResponse()
+        if url == gene_curation.ESEARCH_URL:
+            return SearchResponse()
+        assert url == gene_curation.EFETCH_URL
+        return FetchResponse()
+
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+    client = gene_curation.NcbiClient(
+        min_interval_seconds=0,
+        max_retries=1,
+        backoff_seconds=0,
+    )
+
+    records = gene_curation.retrieve_pubmed_records("ALK", ncbi_client=client)
+
+    assert calls == [
+        gene_curation.ESEARCH_URL,
+        gene_curation.ESEARCH_URL,
+        gene_curation.EFETCH_URL,
+    ]
+    assert records[0].pmid == "123"
+
+
+def test_curate_fusion_genes_reports_pubmed_rate_limit_as_gene_error(monkeypatch):
+    class Fusion:
+        five_gene = "EML4"
+        three_gene = "ALK"
+
+    def fake_retrieve_pubmed_records(*args, **kwargs):
+        raise gene_curation.PubMedRateLimitError("NCBI PubMed rate limit was reached.")
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "retrieve_pubmed_records", fake_retrieve_pubmed_records)
+
+    result = gene_curation.curate_fusion_genes([Fusion()])
+
+    assert result["genes"][0]["insufficient_evidence"] is True
+    assert "NCBI PubMed rate limit" in result["genes"][0]["error"]
 
 
 def test_unique_genes_from_fusions_accepts_dicts_and_missing_values():

@@ -401,14 +401,14 @@ components sit on top of the same core engine:
   site on **GitHub Pages** — no server, no container, $0 hosting cost.
 
 The server-side curation endpoint accepts the same batch fusion rows as
-annotation, but it
-does not require every row to have exon or genomic breakpoints. When Genome
-Nexus can resolve the fusion structure, curation includes transcript, exon,
-protein-breakpoint, retained/lost domain, and kinase-domain context. When only
-the gene pair is known, curation still runs against PubMed and the output marks
-`fusion_specificity=gene_pair_only`, `breakpoint_context_available=false`, and a
-limitation explaining that exact exon/protein claims should not be made. The web
-batch input supports both forms:
+annotation, but it does not require every row to have exon or genomic
+breakpoints. When Genome Nexus can resolve the fusion structure, curation
+includes transcript, exon, protein-breakpoint, retained/lost domain, and
+kinase-domain context. When only the gene pair is known, curation still runs
+against PubMed and the output marks `fusion_specificity=gene_pair_only`,
+`breakpoint_context_available=false`, and a limitation explaining that exact
+exon/protein claims should not be made. The web batch input supports both
+forms:
 
 ```text
 EML4::ALK,13,20
@@ -422,6 +422,13 @@ literature-backed driver signal, confidence label, rationale, supporting PMIDs,
 retrieved PMIDs, and any Genome Nexus fusion-position context used by the
 curation run. Batch results are reviewed from a selectable list; choosing a
 completed row opens the same result view used by the single-fusion workflow.
+
+Set `NCBI_API_KEY` in the API environment to use a higher PubMed E-utilities
+rate limit during literature retrieval. Store it as a local `.env` entry or a
+deployment secret; do not commit it. The curation service also throttles PubMed
+requests across parallel gene workers and retries transient NCBI 429/5xx
+responses. `FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS` can be set to tune
+the minimum delay between NCBI requests for a deployment.
 
 Run both locally:
 

@@ -5,9 +5,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from dataclasses import asdict
+from dataclasses import field
+from time import monotonic
+from time import sleep
 from typing import Any
 from typing import Iterable
 from typing import Optional
@@ -54,6 +58,66 @@ class FusionCurationContext:
 
 class GeneCurationUnavailable(RuntimeError):
     """Raised when server-side curation is not configured."""
+
+
+class PubMedRateLimitError(RuntimeError):
+    """Raised when NCBI keeps rejecting PubMed retrieval for rate limiting."""
+
+
+@dataclass
+class NcbiClient:
+    api_key: str = ""
+    min_interval_seconds: Optional[float] = None
+    max_retries: int = 3
+    backoff_seconds: float = 1.0
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    _next_request_at: float = field(default=0.0, init=False)
+
+    def __post_init__(self) -> None:
+        if self.min_interval_seconds is None:
+            configured = os.environ.get("FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS")
+            if configured:
+                self.min_interval_seconds = max(0.0, float(configured))
+            else:
+                self.min_interval_seconds = 0.12 if self.api_key else 0.4
+
+    def get(self, url: str, *, params: dict[str, str], timeout: int) -> requests.Response:
+        if self.api_key and "api_key" not in params:
+            params = {**params, "api_key": self.api_key}
+
+        response = None
+        for attempt in range(self.max_retries + 1):
+            self._wait_for_slot()
+            response = requests.get(url, params=params, timeout=timeout)
+            if response.status_code not in {429, 500, 502, 503, 504}:
+                response.raise_for_status()
+                return response
+            if attempt >= self.max_retries:
+                break
+            retry_after = response.headers.get("Retry-After")
+            try:
+                delay = float(retry_after) if retry_after else self.backoff_seconds * (2 ** attempt)
+            except ValueError:
+                delay = self.backoff_seconds * (2 ** attempt)
+            sleep(max(0.0, delay))
+
+        if response is not None and response.status_code == 429:
+            raise PubMedRateLimitError(
+                "NCBI PubMed rate limit was reached while retrieving literature. "
+                "Add NCBI_API_KEY or retry after the rate-limit window resets."
+            )
+        if response is not None:
+            response.raise_for_status()
+        raise PubMedRateLimitError("NCBI PubMed request failed before receiving a response.")
+
+    def _wait_for_slot(self) -> None:
+        with self._lock:
+            now = monotonic()
+            wait_seconds = max(0.0, self._next_request_at - now)
+            if wait_seconds:
+                sleep(wait_seconds)
+                now = monotonic()
+            self._next_request_at = now + (self.min_interval_seconds or 0.0)
 
 
 def _fusion_value(fusion: object, attr: str) -> Any:
@@ -311,10 +375,12 @@ def retrieve_pubmed_records(
     gene: str,
     *,
     ncbi_api_key: str = "",
+    ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
 ) -> list[PubMedRecord]:
     fusion_contexts = fusion_contexts or []
+    ncbi_client = ncbi_client or NcbiClient(api_key=ncbi_api_key)
     queries = _pubmed_queries(gene, fusion_contexts)
     pmids = []
     seen_pmids = set()
@@ -326,10 +392,7 @@ def retrieve_pubmed_records(
             "retmax": str(max_results),
             "sort": "relevance",
         }
-        if ncbi_api_key:
-            params["api_key"] = ncbi_api_key
-        search = requests.get(ESEARCH_URL, params=params, timeout=15)
-        search.raise_for_status()
+        search = ncbi_client.get(ESEARCH_URL, params=params, timeout=15)
         for pmid in search.json().get("esearchresult", {}).get("idlist", []):
             if pmid not in seen_pmids:
                 seen_pmids.add(pmid)
@@ -343,10 +406,7 @@ def retrieve_pubmed_records(
         "rettype": "abstract",
         "retmode": "xml",
     }
-    if ncbi_api_key:
-        fetch_params["api_key"] = ncbi_api_key
-    fetch = requests.get(EFETCH_URL, params=fetch_params, timeout=30)
-    fetch.raise_for_status()
+    fetch = ncbi_client.get(EFETCH_URL, params=fetch_params, timeout=30)
 
     records: list[PubMedRecord] = []
     root = ET.fromstring(fetch.text)
@@ -435,6 +495,7 @@ def curate_gene(
     *,
     anthropic_api_key: str,
     ncbi_api_key: str = "",
+    ncbi_client: Optional[NcbiClient] = None,
     model: str = "claude-3-5-haiku-latest",
     max_results: int = 8,
     abstract_chars: int = 1200,
@@ -447,6 +508,7 @@ def curate_gene(
     records = retrieve_pubmed_records(
         gene,
         ncbi_api_key=ncbi_api_key,
+        ncbi_client=ncbi_client,
         max_results=max_results,
         fusion_contexts=fusion_contexts,
     )
@@ -533,6 +595,7 @@ def curate_fusion_genes(
     contexts_by_gene = fusion_contexts_by_gene(fusions, annotation_results)
     genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
     ncbi_api_key = os.environ.get("NCBI_API_KEY", "")
+    ncbi_client = NcbiClient(api_key=ncbi_api_key)
     model = os.environ.get("FUSION_GENE_CURATION_MODEL", "claude-3-5-haiku-latest")
     max_results = max(1, int(os.environ.get("FUSION_GENE_CURATION_MAX_RESULTS", "8")))
     abstract_chars = max(200, int(os.environ.get("FUSION_GENE_CURATION_ABSTRACT_CHARS", "1200")))
@@ -546,6 +609,7 @@ def curate_fusion_genes(
                 gene,
                 anthropic_api_key=anthropic_api_key,
                 ncbi_api_key=ncbi_api_key,
+                ncbi_client=ncbi_client,
                 model=model,
                 max_results=max_results,
                 abstract_chars=abstract_chars,
