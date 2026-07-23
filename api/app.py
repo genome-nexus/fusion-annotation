@@ -28,7 +28,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -36,6 +36,11 @@ from slowapi.util import get_remote_address
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from fusion_annotation.core import annotate_fusion  # noqa: E402
+from fusion_annotation.gene_curation import (  # noqa: E402
+    DEFAULT_CURATION_MODEL,
+    GeneCurationUnavailable,
+    curate_fusion_genes,
+)
 from fusion_annotation.provider_factory import make_provider  # noqa: E402
 
 
@@ -99,6 +104,13 @@ class AnnotateRequest(BaseModel):
     species: str = Field(
         "homo_sapiens", description="Species identifier. Non-human species always use RestDataProvider.")
 
+    @field_validator("five_exon", "three_exon", mode="before")
+    @classmethod
+    def _blank_exon_to_none(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
 
 class AnnotateResponse(BaseModel):
     interface: dict
@@ -113,6 +125,10 @@ class BatchAnnotateRequest(BaseModel):
         min_length=1,
         description="Fusion annotations to run in one request.",
     )
+    force_gene_curation: bool = Field(
+        False,
+        description="When true, run per-gene literature curation even if exact fusion literature is sufficient.",
+    )
 
 
 class BatchAnnotateItemResult(BaseModel):
@@ -123,6 +139,11 @@ class BatchAnnotateItemResult(BaseModel):
 
 class BatchAnnotateResponse(BaseModel):
     results: list[BatchAnnotateItemResult]
+
+
+class GeneCurationResponse(BaseModel):
+    fusions: list[dict] = Field(default_factory=list)
+    genes: list[dict]
 
 
 def _batch_worker_count(item_count: int) -> int:
@@ -187,6 +208,18 @@ def _annotate_batch_items(fusions: list[AnnotateRequest]) -> list[BatchAnnotateI
         for result in results
         if result is not None
     ]
+
+
+def _batch_result_to_curation_context(item: BatchAnnotateItemResult) -> dict:
+    context = {"input": item.input}
+    if item.result is not None:
+        if hasattr(item.result, "model_dump"):
+            context["result"] = item.result.model_dump()
+        else:
+            context["result"] = item.result.dict()
+    if item.error is not None:
+        context["error"] = item.error
+    return context
 
 
 def _run_annotation(params: AnnotateRequest) -> dict:
@@ -263,6 +296,32 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
     failing the whole batch.
     """
     return BatchAnnotateResponse(results=_annotate_batch_items(params.fusions))
+
+
+@app.get("/api/gene-curation/status")
+def gene_curation_status() -> dict:
+    return {
+        "enabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "model": os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL),
+    }
+
+
+@app.post("/api/gene-curation", response_model=GeneCurationResponse)
+@limiter.limit(RATE_LIMIT)
+def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # noqa: ARG001
+    """Run server-side literature curation with Genome Nexus fusion context."""
+    try:
+        annotation_results = [
+            _batch_result_to_curation_context(item)
+            for item in _annotate_batch_items(params.fusions)
+        ]
+        return curate_fusion_genes(
+            params.fusions,
+            annotation_results=annotation_results,
+            force_gene_curation=params.force_gene_curation,
+        )
+    except GeneCurationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 if __name__ == "__main__":

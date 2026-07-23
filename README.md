@@ -393,11 +393,56 @@ components sit on top of the same core engine:
   rate limiting (`FUSION_ANNOTATION_RATE_LIMIT`, default `30/minute`) and a
   configurable CORS allowlist (`FUSION_ANNOTATION_CORS_ORIGINS`, default `*`).
 - **`web/`** — a React + TypeScript SPA (Vite) that calls `api/` for a
-  lookup form, an HGVS.p-like result summary, a domain-retention table, and
-  an interactive SVG domain diagram (the in-browser version of the figure at
-  the top of this README). The current lookup is always reflected in the URL
-  query string, so the address bar doubles as the permalink. Deployed as a
-  static site on **GitHub Pages** — no server, no container, $0 hosting cost.
+  single-fusion lookup tab, a separate batch annotation tab, an HGVS.p-like
+  result summary, a domain-retention table, and an interactive SVG domain
+  diagram (the in-browser version of the figure at the top of this README).
+  The current single-fusion lookup is always reflected in the URL query
+  string, so the address bar doubles as the permalink. Deployed as a static
+  site on **GitHub Pages** — no server, no container, $0 hosting cost.
+
+The server-side curation endpoint accepts the same batch fusion rows as
+annotation, but it does not require every row to have exon or genomic
+breakpoints. When Genome Nexus can resolve the fusion structure, curation
+includes transcript, exon, protein-breakpoint, retained/lost domain, and
+kinase-domain context. When only the gene pair is known, curation still runs
+against PubMed and the output marks `fusion_specificity=gene_pair_only`,
+`breakpoint_context_available=false`, and a limitation explaining that exact
+exon/protein claims should not be made. The web batch input supports both
+forms:
+
+```text
+EML4::ALK,13,20
+CD74::ROS1
+```
+
+In the web UI, AGCG-style curation appears as an expandable **Gene information**
+section at the bottom of each fusion annotation result rather than as a separate
+top-level results block. Curation runs fusion-first: it retrieves and summarizes
+literature for the exact fusion, including whether the fusion itself is
+identified in PubMed, driver/actionability rationale, supporting PMIDs,
+retrieved PMIDs, and any Genome Nexus fusion-position context used by the run.
+When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
+skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
+per-gene override when deeper review is needed. When exact-fusion literature is
+sparse, the two involved gene sections can be expanded to review gene-level
+driver signal, confidence label, rationale, supporting PMIDs, and retrieved
+PMIDs. Gene-level curation checks OncoKB first via the curated-gene list and
+uses the OncoKB gene type, summary/background, and highest evidence levels when
+available. That avoids PubMed retrieval and LLM synthesis for genes already
+covered by OncoKB. PubMed/LLM gene synthesis is only used when an OncoKB token
+is not configured or the gene is not informative in OncoKB. Batch results are
+reviewed from a selectable list; choosing a completed row opens the same result
+view used by the single-fusion workflow.
+
+Set `ONCOKB_API_TOKEN` in the API environment to enable OncoKB-backed per-gene
+curation. Store it as a local `.env` entry or a deployment secret; do not commit
+it. Set `NCBI_API_KEY` to use a higher PubMed E-utilities rate limit during
+fusion-level literature retrieval and PubMed/LLM gene fallback. The curation
+service also throttles PubMed requests across parallel gene workers and retries
+transient NCBI 429/5xx responses.
+`FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS` can be set to tune the minimum
+delay between NCBI requests for a deployment. The default curation model is
+`claude-haiku-4-5-20251001`; set `FUSION_GENE_CURATION_MODEL` to override it.
 
 Run both locally:
 

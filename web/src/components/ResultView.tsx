@@ -1,5 +1,12 @@
 import { useState } from "react";
-import type { AnnotationResult, FusionKnowledge } from "../lib/types";
+import type {
+  AnnotationResult,
+  ApiError,
+  FusionKnowledge,
+  GeneCurationFusionResult,
+  GeneCurationGeneResult,
+  GeneFusionCurationContext,
+} from "../lib/types";
 import { computeDerivedInputs, type DerivedInputs, type PartnerDerived } from "../lib/derivedInputs";
 import { civicEvidenceLink, civicMolecularProfileLink } from "../lib/externalLinks";
 import { DomainDiagram } from "./DomainDiagram";
@@ -9,6 +16,14 @@ import { TranscriptStructureDiagram } from "./TranscriptStructureDiagram";
 interface Props {
   result: AnnotationResult;
   permalink: string;
+  fusionCurationResults?: GeneCurationFusionResult[] | null;
+  geneCurationResults?: GeneCurationGeneResult[] | null;
+  geneCurationLoading?: boolean;
+  geneCurationEnabled?: boolean;
+  geneCurationError?: ApiError | null;
+  onCurateGenes?: () => void;
+  onForceGeneCuration?: () => void;
+  onExportGeneCurationCsv?: () => void;
 }
 
 type DiagramView = "domain" | "structure";
@@ -31,12 +46,12 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function PartnerBreakpoints({ label, p, aa }: { label: string; p: PartnerDerived; aa: number }) {
+function PartnerBreakpoints({ label, p, aa }: { label: string; p: PartnerDerived; aa: number | null }) {
   const rows: Array<{ name: string; value: string | null }> = [
     { name: "Genomic", value: p.genomic },
     { name: "Exon", value: p.exon != null ? `exon ${p.exon}` : null },
-    { name: "CDS", value: `c.${p.cds}` },
-    { name: "Protein", value: `aa ${aa}` },
+    { name: "CDS", value: p.cds != null ? `c.${p.cds}` : null },
+    { name: "Protein", value: aa != null ? `aa ${aa}` : null },
   ];
   return (
     <div className="equiv-partner">
@@ -102,11 +117,446 @@ function ClinicalEvidence({ knowledge }: { knowledge: FusionKnowledge }) {
   );
 }
 
-export function ResultView({ result, permalink }: Props) {
+function curationPriority(item: GeneCurationGeneResult | GeneCurationFusionResult) {
+  if (item.insufficient_evidence) {
+    return {
+      label: "Low priority",
+      tone: "muted",
+      title: "PubMed evidence was too sparse for a confident curation result.",
+    };
+  }
+  if (item.cancer_associated === true) {
+    return {
+      label: "Review priority",
+      tone: "attention",
+      title: "Cancer-associated literature evidence was found; review before follow-up.",
+    };
+  }
+  if (item.cancer_associated === false) {
+    return {
+      label: "Low priority",
+      tone: "muted",
+      title: "Current PubMed evidence does not support a cancer association.",
+    };
+  }
+  return {
+    label: "Needs review",
+    tone: "neutral",
+    title: "The curation result is uncertain and should be reviewed.",
+  };
+}
+
+function curationEvidenceSignal(item: GeneCurationGeneResult | GeneCurationFusionResult) {
+  if (item.insufficient_evidence) {
+    return {
+      label: "Sparse evidence",
+      tone: "muted",
+      title: "The curation model marked the retrieved literature as insufficient.",
+    };
+  }
+  if (item.cancer_associated === true) {
+    return {
+      label: "Functional cancer evidence",
+      tone: "evidence",
+      title: "Cancer-associated evidence is shown without changing backend schema or tier logic.",
+    };
+  }
+  if (item.cancer_associated === false) {
+    return {
+      label: "No cancer evidence",
+      tone: "muted",
+      title: "The curation result did not find supporting cancer evidence.",
+    };
+  }
+  return {
+    label: "Uncertain evidence",
+    tone: "neutral",
+    title: "The curation result did not make a binary cancer association call.",
+  };
+}
+
+function curationBadges(item: GeneCurationGeneResult | GeneCurationFusionResult) {
+  return [curationPriority(item), curationEvidenceSignal(item)];
+}
+
+function formatContextSide(context: GeneFusionCurationContext) {
+  return context.side === "five_prime" ? "5' partner" : "3' partner";
+}
+
+function formatDomainList(domains?: string[]) {
+  return domains && domains.length ? domains.join(", ") : "none";
+}
+
+function formatFusionSpecificity(value?: GeneFusionCurationContext["fusion_specificity"]) {
+  if (value === "protein_domain_level") return "Protein/domain-level";
+  if (value === "exon_level") return "Exon-level";
+  return "Gene-pair only";
+}
+
+function pubmedUrl(pmid: string) {
+  return `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
+}
+
+function confidenceLabel(item?: GeneCurationGeneResult | GeneCurationFusionResult) {
+  if (!item || item.insufficient_evidence) return "Low";
+  if (item.cancer_associated === true) return "Higher";
+  if (item.cancer_associated === false) return "Lower";
+  return "Uncertain";
+}
+
+function renderFusionContext(context: GeneFusionCurationContext) {
+  const breakpoint = context.side === "five_prime"
+    ? {
+        transcript: context.five_transcript,
+        exon: context.five_exon,
+        genomic: context.five_genomic,
+        protein: context.five_protein_breakpoint,
+      }
+    : {
+        transcript: context.three_transcript,
+        exon: context.three_exon,
+        genomic: context.three_genomic,
+        protein: context.three_protein_breakpoint,
+      };
+  return (
+    <div className="fusion-curation-context" key={`${context.gene}-${context.fusion}-${context.side}`}>
+      <div className="fusion-curation-context-title">
+        <strong>{context.fusion}</strong>
+        <span>{formatContextSide(context)}</span>
+      </div>
+      <dl>
+        <dt>Scope</dt>
+        <dd>
+          {formatFusionSpecificity(context.fusion_specificity)}
+          {context.breakpoint_context_available ? "" : " · breakpoint context unavailable"}
+        </dd>
+        <dt>Partner</dt>
+        <dd>{context.partner_gene}</dd>
+        <dt>Breakpoint</dt>
+        <dd>
+          tx {breakpoint.transcript || "unknown"} · exon {breakpoint.exon || "unknown"} · genomic{" "}
+          {breakpoint.genomic || "unknown"} · protein {breakpoint.protein || "unknown"}
+        </dd>
+        <dt>Domains</dt>
+        <dd>
+          retained: {formatDomainList(context.retained_domains)} · lost/disrupted:{" "}
+          {formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}
+        </dd>
+        <dt>Kinase</dt>
+        <dd>
+          {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
+        </dd>
+      </dl>
+      {context.limitations && context.limitations.length > 0 && (
+        <ul className="fusion-curation-limitations">
+          {context.limitations.map((limitation) => (
+            <li key={limitation}>{limitation}</li>
+          ))}
+        </ul>
+      )}
+      {context.annotation_error && (
+        <p className="fusion-curation-context-error">{context.annotation_error}</p>
+      )}
+    </div>
+  );
+}
+
+function GeneInformationSection({
+  result,
+  fusionCurationResults,
+  geneCurationResults,
+  geneCurationLoading = false,
+  geneCurationEnabled = false,
+  geneCurationError = null,
+  onCurateGenes,
+  onForceGeneCuration,
+  onExportGeneCurationCsv,
+}: {
+  result: AnnotationResult;
+  fusionCurationResults?: GeneCurationFusionResult[] | null;
+  geneCurationResults?: GeneCurationGeneResult[] | null;
+  geneCurationLoading?: boolean;
+  geneCurationEnabled?: boolean;
+  geneCurationError?: ApiError | null;
+  onCurateGenes?: () => void;
+  onForceGeneCuration?: () => void;
+  onExportGeneCurationCsv?: () => void;
+}) {
+  const genes = [
+    result.resolved.five.gene,
+    result.resolved.three.gene,
+  ].filter((gene, index, values) => values.indexOf(gene) === index);
+  const byGene = new Map(
+    (geneCurationResults || []).map((item) => [item.gene.toUpperCase(), item]),
+  );
+  const fusionItem = (fusionCurationResults || []).find(
+    (item) => item.fusion === result.interface.categorical_key,
+  );
+  const fusionSufficient = Boolean(
+    fusionItem
+      && !fusionItem.error
+      && !fusionItem.insufficient_evidence
+      && fusionItem.fusion_literature_identified !== false,
+  );
+
+  return (
+    <section className="gene-info-section">
+      <div className="gene-info-header">
+        <div>
+          <h3>Fusion and gene information</h3>
+          <p>
+            Exact-fusion evidence is checked first; gene details use OncoKB first when they are shown.
+          </p>
+        </div>
+        <div className="gene-info-actions">
+          {geneCurationResults?.length || fusionCurationResults?.length ? (
+            <button type="button" className="secondary-button" onClick={onExportGeneCurationCsv}>
+              Export curation CSV
+            </button>
+          ) : null}
+          {onCurateGenes && (
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={!geneCurationEnabled || geneCurationLoading}
+              onClick={onCurateGenes}
+            >
+              {geneCurationLoading ? "Loading fusion info..." : "Get fusion info"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {!geneCurationEnabled && (
+        <div className="notice-box">
+          Server-side gene curation is not configured for this deployment.
+        </div>
+      )}
+      {geneCurationError && (
+        <div className="error-box">
+          <strong>Curation error {geneCurationError.status}:</strong> {geneCurationError.detail}
+        </div>
+      )}
+
+      <div className="gene-info-list">
+        <details className="gene-info-item" open={Boolean(fusionItem)}>
+          <summary>
+            <span className="gene-info-symbol">{result.interface.categorical_key}</span>
+            <span className="gene-info-summary">
+              {fusionItem
+                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · confidence ${confidenceLabel(fusionItem)}`
+                : "No fusion-specific literature curation loaded"}
+            </span>
+          </summary>
+          {fusionItem ? (
+            fusionItem.error ? (
+              <div className="error-box">{fusionItem.error}</div>
+            ) : (
+              <div className="gene-info-body">
+                <div className="curation-badges" aria-label={`${fusionItem.fusion} review signals`}>
+                  {curationBadges(fusionItem).map((badge) => (
+                    <span className={`status-chip ${badge.tone}`} key={badge.label} title={badge.title}>
+                      {badge.label}
+                    </span>
+                  ))}
+                </div>
+                <dl className="gene-curation-fields">
+                  <dt>Fusion in literature</dt>
+                  <dd>
+                    {fusionItem.fusion_literature_identified == null
+                      ? "Unknown"
+                      : fusionItem.fusion_literature_identified ? "Yes" : "No"}
+                  </dd>
+                  <dt>Known driver signal</dt>
+                  <dd>
+                    {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
+                  </dd>
+                  <dt>Confidence</dt>
+                  <dd>{confidenceLabel(fusionItem)}</dd>
+                  <dt>Rationale</dt>
+                  <dd>{fusionItem.rationale || "No rationale returned."}</dd>
+                </dl>
+                {fusionItem.fusion_contexts && fusionItem.fusion_contexts.length > 0 && (
+                  <div className="fusion-curation-contexts">
+                    {fusionItem.fusion_contexts.map(renderFusionContext)}
+                  </div>
+                )}
+                <div className="pmid-row">
+                  <strong>Rationale Supporting PMIDs</strong>
+                  <span>
+                    {fusionItem.supporting_pmids?.length
+                      ? fusionItem.supporting_pmids.map((pmid, index) => (
+                          <span key={pmid}>
+                            {index > 0 && ", "}
+                            <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">
+                              {pmid}
+                            </a>
+                          </span>
+                        ))
+                      : "None selected"}
+                  </span>
+                </div>
+                <div className="pmid-row">
+                  <strong>Retrieved PMIDs</strong>
+                  <span>{fusionItem.retrieved_pmids?.join(", ") || "None retrieved"}</span>
+                </div>
+              </div>
+            )
+          ) : (
+            <p className="gene-info-empty">
+              Run fusion info to check whether this exact fusion is described in PubMed.
+            </p>
+          )}
+        </details>
+
+        {fusionSufficient && !geneCurationResults?.length && onForceGeneCuration && (
+          <div className="notice-box gene-info-skip">
+            Fusion-specific literature was sufficient, so gene details were skipped. Gene details use OncoKB first
+            and only fall back to literature when needed.
+            <button
+              type="button"
+              className="secondary-button"
+              disabled={geneCurationLoading}
+              onClick={onForceGeneCuration}
+            >
+              Get gene details
+            </button>
+          </div>
+        )}
+
+        {genes.map((gene) => {
+          const item = byGene.get(gene.toUpperCase());
+          const contexts = item?.fusion_contexts?.filter(
+            (context) => context.fusion === result.interface.categorical_key,
+          );
+          return (
+            <details className="gene-info-item" key={gene}>
+              <summary>
+                <span className="gene-info-symbol">{gene}</span>
+                <span className="gene-info-summary">
+                  {item
+                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
+                    : "No gene details loaded"}
+                </span>
+              </summary>
+              {item ? (
+                item.error ? (
+                  <div className="error-box">{item.error}</div>
+                ) : (
+                  <div className="gene-info-body">
+                    <div className="curation-badges" aria-label={`${gene} review signals`}>
+                      {curationBadges(item).map((badge) => (
+                        <span className={`status-chip ${badge.tone}`} key={badge.label} title={badge.title}>
+                          {badge.label}
+                        </span>
+                      ))}
+                    </div>
+                    <dl className="gene-curation-fields">
+                      {item.curation_source && (
+                        <>
+                          <dt>Source</dt>
+                          <dd>{item.curation_source}</dd>
+                        </>
+                      )}
+                      {item.oncokb_gene_type && (
+                        <>
+                          <dt>OncoKB gene type</dt>
+                          <dd>{item.oncokb_gene_type.replaceAll("_", " ").toLowerCase()}</dd>
+                        </>
+                      )}
+                      {(item.oncokb_highest_sensitive_level || item.oncokb_highest_resistance_level) && (
+                        <>
+                          <dt>OncoKB evidence levels</dt>
+                          <dd>
+                            {[
+                              item.oncokb_highest_sensitive_level
+                                ? `Sensitive ${item.oncokb_highest_sensitive_level}`
+                                : "",
+                              item.oncokb_highest_resistance_level
+                                ? `Resistance ${item.oncokb_highest_resistance_level}`
+                                : "",
+                            ].filter(Boolean).join("; ")}
+                          </dd>
+                        </>
+                      )}
+                      {item.oncokb_url && (
+                        <>
+                          <dt>OncoKB page</dt>
+                          <dd>
+                            <a href={item.oncokb_url} target="_blank" rel="noopener noreferrer">
+                              {item.oncokb_url}
+                            </a>
+                          </dd>
+                        </>
+                      )}
+                      <dt>Known driver signal</dt>
+                      <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
+                      <dt>Confidence</dt>
+                      <dd>{confidenceLabel(item)}</dd>
+                      <dt>Rationale</dt>
+                      <dd>{item.rationale || "No rationale returned."}</dd>
+                      <dt>Fusion knowledge</dt>
+                      <dd>{result.knowledge.oncogenic ?? "No fusion-level knowledge-base signal returned."}</dd>
+                    </dl>
+                    {contexts && contexts.length > 0 && (
+                      <div className="fusion-curation-contexts">
+                        {contexts.map(renderFusionContext)}
+                      </div>
+                    )}
+                    <div className="pmid-row">
+                      <strong>Rationale Supporting PMIDs</strong>
+                      <span>
+                        {item.supporting_pmids?.length
+                          ? item.supporting_pmids.map((pmid, index) => (
+                              <span key={pmid}>
+                                {index > 0 && ", "}
+                                <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">
+                                  {pmid}
+                                </a>
+                              </span>
+                            ))
+                          : "None selected"}
+                      </span>
+                    </div>
+                    <div className="pmid-row">
+                      <strong>Retrieved PMIDs</strong>
+                      <span>{item.retrieved_pmids?.join(", ") || "None retrieved"}</span>
+                    </div>
+                  </div>
+                )
+              ) : (
+                <p className="gene-info-empty">
+                  {fusionSufficient
+                    ? `Gene details for ${gene} were skipped because fusion-specific literature was sufficient.`
+                    : `Gene details for ${gene} use OncoKB first, with literature fallback only if needed.`}
+                </p>
+              )}
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+export function ResultView({
+  result,
+  permalink,
+  fusionCurationResults,
+  geneCurationResults,
+  geneCurationLoading,
+  geneCurationEnabled,
+  geneCurationError,
+  onCurateGenes,
+  onForceGeneCuration,
+  onExportGeneCurationCsv,
+}: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
   const [diagramView, setDiagramView] = useState<DiagramView>("domain");
   const hasTranscriptStructure = Boolean(resolved.five.structure || resolved.three.structure);
   const derived = computeDerivedInputs(result);
+  const hasProteinBreakpoint = iface.five_last_aa != null && iface.three_first_aa != null;
+  const frameClass = iface.in_frame == null ? "neutral" : iface.in_frame ? "ok" : "bad";
 
   return (
     <div className="result-view">
@@ -134,17 +584,25 @@ export function ResultView({ result, permalink }: Props) {
         <dt>Categorical fusion</dt>
         <dd>{iface.categorical_key}</dd>
         <dt>Frame</dt>
-        <dd className={iface.in_frame ? "ok" : "bad"}>
-          {iface.frame_status} (protein {iface.fusion_length} aa, internal stops {iface.internal_stops})
+        <dd className={frameClass}>
+          {iface.frame_status === "unknown"
+            ? "Unknown; breakpoint required for protein reconstruction"
+            : `${iface.frame_status} (protein ${iface.fusion_length} aa, internal stops ${iface.internal_stops})`}
         </dd>
         <dt>Junction</dt>
         <dd>
-          {iface.five_gene} {iface.five_last_aa_res}
-          {iface.five_last_aa} :: {iface.three_gene} {iface.three_first_aa_res}
-          {iface.three_first_aa}
-          {iface.hybrid_codon && iface.junction_residue
-            ? ` (hybrid codon → ${iface.junction_residue})`
-            : ""}
+          {hasProteinBreakpoint
+            ? (
+                <>
+                  {iface.five_gene} {iface.five_last_aa_res}
+                  {iface.five_last_aa} :: {iface.three_gene} {iface.three_first_aa_res}
+                  {iface.three_first_aa}
+                  {iface.hybrid_codon && iface.junction_residue
+                    ? ` (hybrid codon → ${iface.junction_residue})`
+                    : ""}
+                </>
+              )
+            : "Unknown; exon or genomic breakpoint not supplied"}
         </dd>
         <dt>Genome build</dt>
         <dd>{resolved.genome_build}</dd>
@@ -197,7 +655,13 @@ export function ResultView({ result, permalink }: Props) {
         />
       )}
 
-      <EquivalentInputs derived={derived} result={result} />
+      {hasProteinBreakpoint ? (
+        <EquivalentInputs derived={derived} result={result} />
+      ) : (
+        <div className="notice-box">
+          Equivalent breakpoint representations are unavailable until exon or genomic breakpoints are supplied.
+        </div>
+      )}
 
       <DomainTable domains={iface.domains} />
 
@@ -237,6 +701,18 @@ export function ResultView({ result, permalink }: Props) {
       </dl>
 
       <ClinicalEvidence knowledge={knowledge} />
+
+      <GeneInformationSection
+        result={result}
+        fusionCurationResults={fusionCurationResults}
+        geneCurationResults={geneCurationResults}
+        geneCurationLoading={geneCurationLoading}
+        geneCurationEnabled={geneCurationEnabled}
+        geneCurationError={geneCurationError}
+        onCurateGenes={onCurateGenes}
+        onForceGeneCuration={onForceGeneCuration}
+        onExportGeneCurationCsv={onExportGeneCurationCsv}
+      />
 
       <p className="disclaimer">
         This is a research/informatics tool, not a diagnostic device. Results should be reviewed by a
