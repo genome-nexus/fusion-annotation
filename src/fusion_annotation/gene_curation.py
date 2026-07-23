@@ -58,7 +58,7 @@ class FusionCurationContext:
     kinase_gene: Optional[str] = None
     kinase_gene_side: Optional[str] = None
     kinase_domain_status: Optional[str] = None
-    cancer_type: Optional[str] = None
+    tumor_type: Optional[str] = None
     limitations: tuple[str, ...] = ()
     annotation_error: Optional[str] = None
 
@@ -325,7 +325,7 @@ def _context_for_gene(
         kinase_gene=kinase_gene,
         kinase_gene_side=kinase_side,
         kinase_domain_status=kinase_status,
-        cancer_type=_optional_str(_fusion_value(fusion, "cancer_type")),
+        tumor_type=_optional_str(_fusion_value(fusion, "tumor_type")),
         limitations=_context_limitations(result=result, error=error),
         annotation_error=error,
     )
@@ -579,8 +579,8 @@ def _context_specific_terms(contexts: list[FusionCurationContext]) -> set[str]:
         if context.kinase_gene and context.kinase_domain_status:
             terms.add("kinase domain")
             terms.add(f"kinase domain {context.kinase_domain_status}".lower())
-        if context.cancer_type:
-            terms.add(context.cancer_type.lower().strip())
+        if context.tumor_type:
+            terms.add(context.tumor_type.lower().strip())
     return {term for term in terms if term}
 
 
@@ -631,9 +631,9 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
             *_evidence_priority_queries(fusion_hyphen),
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
         ])
-        if context.cancer_type:
-            queries.append(f'"{fusion_hyphen}" AND "{context.cancer_type}"')
-            queries.append(f'"{gene}" AND "{context.cancer_type}" AND fusion')
+        if context.tumor_type:
+            queries.append(f'"{fusion_hyphen}" AND "{context.tumor_type}"')
+            queries.append(f'"{gene}" AND "{context.tumor_type}" AND fusion')
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
@@ -716,13 +716,13 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
     }
     for kinase_gene in sorted(kinase_genes):
         queries.append(f'"{fusion_hyphen}" AND "{kinase_gene}" AND "kinase domain"')
-    cancer_types = {
-        context.cancer_type
+    tumor_types = {
+        context.tumor_type
         for context in fusion_contexts
-        if context.cancer_type
+        if context.tumor_type
     }
-    for cancer_type in sorted(cancer_types):
-        queries.append(f'"{fusion_hyphen}" AND "{cancer_type}"')
+    for tumor_type in sorted(tumor_types):
+        queries.append(f'"{fusion_hyphen}" AND "{tumor_type}"')
     return list(dict.fromkeys(queries))
 
 
@@ -1037,8 +1037,8 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
                 f"domain_status={context.kinase_domain_status or 'unknown'}"
             ),
         ])
-        if context.cancer_type:
-            lines.append(f"  Cancer/disease type: {context.cancer_type}")
+        if context.tumor_type:
+            lines.append(f"  Cancer/disease type: {context.tumor_type}")
         if context.limitations:
             lines.append(f"  Limitations: {'; '.join(context.limitations)}")
         if context.annotation_error:
@@ -1222,8 +1222,8 @@ Return one JSON object with these fields (use null when evidence is absent):
 - fusion
 - fusion_literature_identified: true/false — is the exact fusion described in any paper?
 - cancer_associated: true/false/null
-- observed_in_cancer_type: true/false/null — observed/reported in the indicated cancer type
-  (use cancer_type from the fusion context; null if no cancer_type was supplied)
+- observed_in_tumor_type: true/false/null — observed/reported in the indicated cancer type
+  (use tumor_type from the fusion context; null if no tumor_type was supplied)
 - functionally_oncogenic: true/false/null — has this fusion been functionally tested
   and shown to be oncogenic (transformation assay, kinase activation, mouse model, etc.)?
 - therapeutic_response: list of therapy names (strings) where response was reported,
@@ -1266,7 +1266,7 @@ kinase-domain status beyond the Genome Nexus context.
             "fusion": fusion,
             "fusion_literature_identified": None,
             "cancer_associated": None,
-            "observed_in_cancer_type": None,
+            "observed_in_tumor_type": None,
             "functionally_oncogenic": None,
             "therapeutic_response": None,
             "rationale": text,
@@ -1277,7 +1277,7 @@ kinase-domain status beyond the Genome Nexus context.
         }
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
-    payload.setdefault("observed_in_cancer_type", None)
+    payload.setdefault("observed_in_tumor_type", None)
     payload.setdefault("functionally_oncogenic", None)
     payload.setdefault("therapeutic_response", None)
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)

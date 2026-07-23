@@ -3,6 +3,7 @@ import type { AnnotateParams } from "../lib/types";
 
 interface Props {
   genomeBuild: string;
+  tumorType?: string;
   onSubmit: (params: AnnotateParams[]) => void;
   onCurate?: (params: AnnotateParams[]) => void;
   loading: boolean;
@@ -10,7 +11,11 @@ interface Props {
   curationEnabled?: boolean;
 }
 
-function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | null {
+function parseBatchLine(
+  line: string,
+  genomeBuild: string,
+  tumorType?: string,
+): AnnotateParams | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("#")) return null;
 
@@ -26,6 +31,7 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
       five_gene: fiveGene,
       three_gene: threeGene,
       genome_build: genomeBuild,
+      tumor_type: tumorType || undefined,
       input_mode: "gene_pair",
     };
   }
@@ -41,12 +47,14 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
     five_exon: fiveExon,
     three_exon: threeExon,
     genome_build: genomeBuild,
+    tumor_type: tumorType || undefined,
     input_mode: "exon",
   };
 }
 
 export function BatchFusionForm({
   genomeBuild,
+  tumorType,
   onSubmit,
   onCurate,
   loading,
@@ -59,7 +67,7 @@ export function BatchFusionForm({
   function parseInput(): AnnotateParams[] {
     const parsed = text
       .split(/\r?\n/)
-      .map((line) => parseBatchLine(line, genomeBuild))
+      .map((line) => parseBatchLine(line, genomeBuild, tumorType))
       .filter((item): item is AnnotateParams => item !== null);
     if (!parsed.length) {
       throw new Error("Add at least one fusion line before running a batch.");
