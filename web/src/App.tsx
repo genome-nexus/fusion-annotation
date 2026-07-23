@@ -427,7 +427,6 @@ function App() {
       {activeTab === "batch" && (
         <BatchFusionForm
           genomeBuild={formValues.genome_build}
-          tumorType={formValues.tumor_type}
           onSubmit={runBatchAnnotation}
           loading={batchLoading}
           onCurate={runGeneCuration}

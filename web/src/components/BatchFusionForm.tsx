@@ -3,7 +3,6 @@ import type { AnnotateParams } from "../lib/types";
 
 interface Props {
   genomeBuild: string;
-  tumorType?: string;
   onSubmit: (params: AnnotateParams[]) => void;
   onCurate?: (params: AnnotateParams[]) => void;
   loading: boolean;
@@ -11,11 +10,7 @@ interface Props {
   curationEnabled?: boolean;
 }
 
-function parseBatchLine(
-  line: string,
-  genomeBuild: string,
-  tumorType?: string,
-): AnnotateParams | null {
+function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed.startsWith("#")) return null;
 
@@ -31,7 +26,6 @@ function parseBatchLine(
       five_gene: fiveGene,
       three_gene: threeGene,
       genome_build: genomeBuild,
-      tumor_type: tumorType || undefined,
       input_mode: "gene_pair",
     };
   }
@@ -47,14 +41,12 @@ function parseBatchLine(
     five_exon: fiveExon,
     three_exon: threeExon,
     genome_build: genomeBuild,
-    tumor_type: tumorType || undefined,
     input_mode: "exon",
   };
 }
 
 export function BatchFusionForm({
   genomeBuild,
-  tumorType,
   onSubmit,
   onCurate,
   loading,
@@ -62,12 +54,14 @@ export function BatchFusionForm({
   curationEnabled = false,
 }: Props) {
   const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2\nCD74::ROS1");
+  const [tumorType, setTumorType] = useState("");
   const [parseError, setParseError] = useState<string | null>(null);
 
   function parseInput(): AnnotateParams[] {
     const parsed = text
       .split(/\r?\n/)
-      .map((line) => parseBatchLine(line, genomeBuild, tumorType))
+      .map((line) => parseBatchLine(line, genomeBuild))
+      .map((item) => item && tumorType.trim() ? { ...item, tumor_type: tumorType.trim() } : item)
       .filter((item): item is AnnotateParams => item !== null);
     if (!parsed.length) {
       throw new Error("Add at least one fusion line before running a batch.");
@@ -110,6 +104,14 @@ export function BatchFusionForm({
         rows={5}
         aria-label="Batch fusion input"
       />
+      <label>
+        Tumor type <span className="hint">(optional, applies to all rows)</span>
+        <input
+          value={tumorType}
+          onChange={(event) => setTumorType(event.target.value)}
+          placeholder="lung adenocarcinoma"
+        />
+      </label>
       {parseError && <div className="error-box">{parseError}</div>}
       <div className="batch-actions">
         <button type="submit" disabled={loading || curationLoading} className="submit-button">
