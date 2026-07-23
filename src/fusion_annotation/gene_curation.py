@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -30,6 +31,8 @@ class PubMedRecord:
     pmid: str
     title: str
     abstract: str
+    publication_types: tuple[str, ...] = ()
+    mesh_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -384,6 +387,155 @@ def _strip_markdown_json_fence(text: str) -> str:
     return cleaned
 
 
+_HUMAN_CLINICAL_TERMS = (
+    "clinical trial",
+    "phase i",
+    "phase ii",
+    "phase iii",
+    "patients",
+    "patient",
+    "case report",
+    "case series",
+    "cohort",
+    "retrospective",
+    "prospective",
+    "therapy",
+    "therapeutic",
+    "treated",
+    "response",
+)
+_CELL_LINE_TERMS = (
+    "cell line",
+    "cell lines",
+    "in vitro",
+    "ba/f3",
+    "nih3t3",
+    "transformation assay",
+    "proliferation assay",
+    "soft agar",
+)
+_MOUSE_MODEL_TERMS = (
+    "mouse",
+    "mice",
+    "murine",
+    "xenograft",
+    "in vivo",
+)
+_STRUCTURAL_CONTEXT_TERMS = (
+    "breakpoint",
+    "breakpoints",
+    "variant",
+    "variants",
+    "exon",
+    "exons",
+    "transcript",
+    "frame",
+    "in-frame",
+    "domain",
+    "kinase domain",
+    "retained",
+    "retention",
+)
+
+
+def _or_terms(terms: Iterable[str]) -> str:
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
+def _evidence_priority_queries(subject: str) -> list[str]:
+    return [
+        f'"{subject}" AND ({_or_terms(_HUMAN_CLINICAL_TERMS)})',
+        f'"{subject}" AND ({_or_terms(_CELL_LINE_TERMS)})',
+        f'"{subject}" AND ({_or_terms(_MOUSE_MODEL_TERMS)})',
+    ]
+
+
+def _record_text(record: PubMedRecord) -> str:
+    return " ".join((
+        record.title,
+        record.abstract,
+        " ".join(record.publication_types),
+        " ".join(record.mesh_terms),
+    )).lower()
+
+
+def _contains_phrase_or_token(text: str, term: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])", text) is not None
+
+
+def _publication_evidence_rank(record: PubMedRecord) -> int:
+    text = _record_text(record)
+    if any(_contains_phrase_or_token(text, term) for term in _HUMAN_CLINICAL_TERMS):
+        return 0
+    if any(_contains_phrase_or_token(text, term) for term in _CELL_LINE_TERMS):
+        return 1
+    if any(_contains_phrase_or_token(text, term) for term in _MOUSE_MODEL_TERMS):
+        return 2
+    return 3
+
+
+def _context_specific_terms(contexts: list[FusionCurationContext]) -> set[str]:
+    terms = set()
+    for context in contexts:
+        for value in (
+            context.five_transcript,
+            context.three_transcript,
+            context.five_genomic,
+            context.three_genomic,
+            context.five_protein_breakpoint,
+            context.three_protein_breakpoint,
+        ):
+            if value:
+                terms.add(str(value).lower())
+        for exon in (context.five_exon, context.three_exon):
+            if exon:
+                terms.add(f"exon {exon}".lower())
+                terms.add(f"e{exon}".lower())
+        for domain in (
+            *context.retained_domains,
+            *context.lost_domains,
+            *context.disrupted_domains,
+        ):
+            if domain:
+                terms.add(str(domain).split("(", 1)[0].strip().lower())
+        if context.kinase_gene and context.kinase_domain_status:
+            terms.add("kinase domain")
+            terms.add(f"kinase domain {context.kinase_domain_status}".lower())
+    return {term for term in terms if term}
+
+
+def _record_structural_rank(
+    record: PubMedRecord,
+    fusion_contexts: list[FusionCurationContext],
+) -> int:
+    if not fusion_contexts:
+        return 1
+    text = _record_text(record)
+    exact_terms = _context_specific_terms(fusion_contexts)
+    if any(_contains_phrase_or_token(text, term) for term in exact_terms):
+        return 0
+    if any(_contains_phrase_or_token(text, term) for term in _STRUCTURAL_CONTEXT_TERMS):
+        return 0
+    return 1
+
+
+def _rank_pubmed_records(
+    records: list[PubMedRecord],
+    *,
+    query_positions: dict[str, int],
+    fusion_contexts: list[FusionCurationContext],
+) -> list[PubMedRecord]:
+    return sorted(
+        records,
+        key=lambda record: (
+            _publication_evidence_rank(record),
+            _record_structural_rank(record, fusion_contexts),
+            query_positions.get(record.pmid, 10_000),
+            int(record.pmid) if record.pmid.isdigit() else record.pmid,
+        ),
+    )
+
+
 def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
     queries = [
         f'"{gene}"[Title/Abstract] AND (cancer OR tumor OR tumour OR carcinoma)',
@@ -392,11 +544,33 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
         fusion_hyphen = context.fusion.replace("::", "-")
         queries.extend([
             f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma)',
+            f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
+            *_evidence_priority_queries(fusion_hyphen),
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
         ])
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
+            queries.append(f'"{fusion_hyphen}" AND "exon {exon}"')
+        other_exon = context.three_exon if context.side == "five_prime" else context.five_exon
+        if exon and other_exon:
+            queries.append(
+                f'"{gene}" AND "{context.partner_gene}" '
+                f'AND "exon {exon}" AND "exon {other_exon}"'
+            )
+        transcript = context.five_transcript if context.side == "five_prime" else context.three_transcript
+        if transcript:
+            queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        genomic = context.five_genomic if context.side == "five_prime" else context.three_genomic
+        if genomic:
+            queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        protein_breakpoint = (
+            context.five_protein_breakpoint
+            if context.side == "five_prime"
+            else context.three_protein_breakpoint
+        )
+        if protein_breakpoint:
+            queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
         if context.kinase_gene and context.kinase_gene.upper() == gene.upper():
             queries.append(f'"{gene}" AND "kinase domain" AND fusion')
         if context.kinase_gene and context.kinase_domain_status == "retained":
@@ -418,12 +592,35 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
 
     queries = [
         f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma OR sarcoma OR neoplasm)',
+        f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
+        *_evidence_priority_queries(fusion_hyphen),
     ]
     if five_gene and three_gene:
         queries.extend([
             f'"{five_gene}" AND "{three_gene}" AND fusion',
             f'"{five_gene}" AND "{three_gene}" AND (oncogenic OR kinase OR inhibitor OR response)',
+            f'"{five_gene}" AND "{three_gene}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
+    for context in fusion_contexts:
+        exons = [value for value in (context.five_exon, context.three_exon) if value]
+        if len(exons) == 2 and five_gene and three_gene:
+            queries.append(
+                f'"{five_gene}" AND "{three_gene}" '
+                f'AND "exon {exons[0]}" AND "exon {exons[1]}"'
+            )
+            queries.append(
+                f'"{fusion_hyphen}" AND "exon {exons[0]}" '
+                f'AND "exon {exons[1]}"'
+            )
+        for transcript in (context.five_transcript, context.three_transcript):
+            if transcript:
+                queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        for genomic in (context.five_genomic, context.three_genomic):
+            if genomic:
+                queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        for protein_breakpoint in (context.five_protein_breakpoint, context.three_protein_breakpoint):
+            if protein_breakpoint:
+                queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
     kinase_genes = {
         context.kinase_gene
         for context in fusion_contexts
@@ -441,11 +638,13 @@ def retrieve_pubmed_records_for_queries(
     ncbi_api_key: str = "",
     ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
+    fusion_contexts: Optional[list[FusionCurationContext]] = None,
 ) -> list[PubMedRecord]:
     ncbi_client = ncbi_client or NcbiClient(api_key=ncbi_api_key)
     pmids = []
     seen_pmids = set()
-    for query in queries:
+    query_positions = {}
+    for query_index, query in enumerate(queries):
         params = {
             "db": "pubmed",
             "term": query,
@@ -458,6 +657,7 @@ def retrieve_pubmed_records_for_queries(
             if pmid not in seen_pmids:
                 seen_pmids.add(pmid)
                 pmids.append(pmid)
+                query_positions[pmid] = query_index
     if not pmids:
         return []
 
@@ -481,9 +681,31 @@ def retrieve_pubmed_records_for_queries(
             "".join(part.itertext()).strip()
             for part in abstract_parts
         ).strip()
+        publication_types = tuple(
+            "".join(part.itertext()).strip()
+            for part in article.findall(".//PublicationTypeList/PublicationType")
+            if "".join(part.itertext()).strip()
+        )
+        mesh_terms = tuple(
+            "".join(part.itertext()).strip()
+            for part in article.findall(".//MeshHeadingList/MeshHeading/DescriptorName")
+            if "".join(part.itertext()).strip()
+        )
         if pmid and abstract:
-            records.append(PubMedRecord(pmid=pmid, title=title, abstract=abstract))
-    return records
+            records.append(
+                PubMedRecord(
+                    pmid=pmid,
+                    title=title,
+                    abstract=abstract,
+                    publication_types=publication_types,
+                    mesh_terms=mesh_terms,
+                )
+            )
+    return _rank_pubmed_records(
+        records,
+        query_positions=query_positions,
+        fusion_contexts=fusion_contexts or [],
+    )[:max_results]
 
 
 def retrieve_pubmed_records(
@@ -501,6 +723,7 @@ def retrieve_pubmed_records(
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
+        fusion_contexts=fusion_contexts,
     )
 
 
@@ -758,6 +981,12 @@ Genome Nexus fusion-position context:
 PubMed context:
 {context}
 
+PubMed records are ordered by retrieval priority. Prefer human clinical or
+patient evidence first, then cell-line/in-vitro functional evidence, then
+mouse/in-vivo model evidence, then review or general biological context. Within
+an evidence tier, prefer records matching the supplied exon, transcript,
+genomic/protein breakpoint, frame, variant, or domain context.
+
 Return one JSON object with:
 - gene
 - cancer_associated: true/false/null
@@ -835,6 +1064,7 @@ def curate_fusion(
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
+        fusion_contexts=fusion_contexts,
     )
     if not records:
         return _no_fusion_pubmed_evidence_result(fusion, fusion_contexts)
@@ -851,6 +1081,12 @@ Genome Nexus fusion-position context:
 
 PubMed context:
 {context}
+
+PubMed records are ordered by retrieval priority. Prefer human clinical or
+patient evidence first, then cell-line/in-vitro functional evidence, then
+mouse/in-vivo model evidence, then review or general biological context. Within
+an evidence tier, prefer records matching the supplied exon, transcript,
+genomic/protein breakpoint, frame, variant, or domain context.
 
 Return one JSON object with:
 - fusion
