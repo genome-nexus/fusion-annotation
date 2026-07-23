@@ -1,14 +1,121 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from fusion_annotation import gene_curation
 from fusion_annotation.gene_curation import (
+    FileCacheBackend,
     FusionCurationContext,
+    NullCacheBackend,
     PubMedRecord,
+    RedisCacheBackend,
 )
 
 
-def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
+@pytest.fixture(autouse=True)
+def reset_cache_backend(monkeypatch):
+    monkeypatch.setattr(gene_curation, "_CACHE_BACKEND", None)
+    monkeypatch.setattr(gene_curation, "_CACHE_BACKEND_CONFIG", None)
+
+
+def test_cache_backend_can_be_disabled(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+
+    backend = gene_curation._cache_backend()
+
+    assert isinstance(backend, NullCacheBackend)
+
+
+def test_cache_backend_defaults_to_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.delenv("FUSION_GENE_CURATION_CACHE_BACKEND", raising=False)
+    backend = gene_curation._cache_backend()
+
+    assert isinstance(backend, FileCacheBackend)
+    backend.write("ns", {"gene": "ALK"}, {"value": 1})
+    assert backend.read("ns", {"gene": "ALK"}) == {"value": 1}
+
+
+def test_redis_cache_backend_round_trips_json(monkeypatch):
+    store = {}
+    expirations = {}
+
+    class FakeRedisClient:
+        def get(self, key):
+            return store.get(key)
+
+        def set(self, key, value, **kwargs):
+            store[key] = value
+            expirations[key] = kwargs.get("ex")
+
+    class FakeRedis:
+        @staticmethod
+        def from_url(url):
+            assert url == "redis://cache.example/0"
+            return FakeRedisClient()
+
+    monkeypatch.setitem(sys.modules, "redis", SimpleNamespace(Redis=FakeRedis))
+
+    backend = RedisCacheBackend("redis://cache.example/0", "test-prefix")
+    backend.write("gene-curation", {"gene": "ALK"}, {"cached": True}, ttl_seconds=60)
+
+    assert backend.read("gene-curation", {"gene": "ALK"}) == {"cached": True}
+    assert list(expirations.values()) == [60]
+
+
+def test_cache_backend_reuses_redis_client_for_same_config(monkeypatch):
+    clients = []
+
+    class FakeRedis:
+        @staticmethod
+        def from_url(url):
+            client = SimpleNamespace(url=url, get=lambda key: None)
+            clients.append(client)
+            return client
+
+    monkeypatch.setitem(sys.modules, "redis", SimpleNamespace(Redis=FakeRedis))
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_BACKEND", "redis")
+    monkeypatch.setenv("FUSION_GENE_CURATION_REDIS_URL", "redis://cache.example/0")
+
+    first = gene_curation._cache_backend()
+    second = gene_curation._cache_backend()
+
+    assert first is second
+    assert len(clients) == 1
+
+
+def test_retrieve_pubmed_records_caches_empty_results(tmp_path, monkeypatch):
+    calls = 0
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"esearchresult": {"idlist": []}}
+
+    def fake_get(url, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert url == gene_curation.ESEARCH_URL
+        return FakeResponse()
+
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+
+    first = gene_curation.retrieve_pubmed_records("NOEVIDENCE")
+    second = gene_curation.retrieve_pubmed_records("NOEVIDENCE")
+
+    assert first == []
+    assert second == []
+    assert calls == 1
+
+
+def test_retrieve_pubmed_records_preserves_mixed_content_xml(tmp_path, monkeypatch):
     class SearchResponse:
         status_code = 200
         headers = {}
@@ -50,6 +157,7 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
         return FetchResponse()
 
     monkeypatch.setenv("FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(gene_curation.requests, "get", fake_get)
 
     records = gene_curation.retrieve_pubmed_records("ALK")
@@ -61,6 +169,35 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
             abstract="Kinase domain retained. Functional cancer evidence.",
         )
     ]
+
+
+def test_retrieve_pubmed_records_adds_tumor_type_queries(tmp_path, monkeypatch):
+    seen_terms = []
+
+    class SearchResponse:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"esearchresult": {"idlist": []}}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        assert url == gene_curation.ESEARCH_URL
+        seen_terms.append(kwargs["params"]["term"])
+        return SearchResponse()
+
+    monkeypatch.setenv("FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+
+    records = gene_curation.retrieve_pubmed_records("ALK", tumor_type="lung adenocarcinoma")
+
+    assert records == []
+    assert any('"ALK" AND "lung adenocarcinoma"' in term for term in seen_terms)
+    assert any('"lung adenocarcinoma"' in term and "cancer" in term for term in seen_terms)
 
 
 def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
@@ -116,6 +253,7 @@ def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
         assert url == gene_curation.EFETCH_URL
         return FetchResponse()
 
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(gene_curation.requests, "get", fake_get)
     client = gene_curation.NcbiClient(
         min_interval_seconds=0,
@@ -138,11 +276,19 @@ def test_curate_fusion_genes_reports_pubmed_rate_limit_as_gene_error(monkeypatch
         five_gene = "EML4"
         three_gene = "ALK"
 
+    def fake_curate_fusion(*args, **kwargs):
+        return {
+            "fusion": "EML4::ALK",
+            "fusion_literature_identified": False,
+            "insufficient_evidence": True,
+        }
+
     def fake_retrieve_pubmed_records(*args, **kwargs):
         raise gene_curation.PubMedRateLimitError("NCBI PubMed rate limit was reached.")
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
     monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
     monkeypatch.setattr(gene_curation, "retrieve_pubmed_records", fake_retrieve_pubmed_records)
 
     result = gene_curation.curate_fusion_genes([Fusion()])
@@ -170,12 +316,14 @@ def test_curate_gene_skips_model_when_pubmed_is_empty(monkeypatch):
         "gene": "NOEVIDENCE",
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this gene.",
+        "cancer_association_rationale": "No PubMed abstracts were retrieved for this gene.",
+        "gene_summary": "",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "fusion_contexts": [],
         "insufficient_evidence": True,
     }
-
 
 def test_curate_gene_uses_oncokb_before_pubmed_or_model(monkeypatch):
     def fake_retrieve_pubmed_records(*args, **kwargs):
@@ -253,7 +401,154 @@ def test_curate_fusion_genes_fetches_oncokb_once_for_gene_fallback(monkeypatch):
     assert [item["curation_source"] for item in result["genes"]] == ["OncoKB", "OncoKB"]
 
 
+def test_curate_gene_reuses_persistent_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    calls = 0
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"ALK fusions are oncogenic.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    first = gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+    second = gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+
+    assert first == second
+    assert first["supporting_pmids"] == ["123"]
+    assert calls == 1
+
+
+def test_fetch_oncokb_curated_gene_index_reuses_persistent_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    calls = 0
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return [
+                {
+                    "hugoSymbol": "ALK",
+                    "geneType": "ONCOGENE",
+                    "summary": "ALK is curated by OncoKB.",
+                }
+            ]
+
+    def fake_get(url, **kwargs):
+        nonlocal calls
+        calls += 1
+        assert url.endswith("/utils/allCuratedGenes")
+        assert kwargs["params"]["includeEvidence"] == "true"
+        assert kwargs["headers"]["Authorization"] == "Bearer oncokb-token"
+        return FakeResponse()
+
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+
+    first = gene_curation.fetch_oncokb_curated_gene_index("oncokb-token")
+    second = gene_curation.fetch_oncokb_curated_gene_index("oncokb-token")
+
+    assert first == second
+    assert first["ALK"]["geneType"] == "ONCOGENE"
+    assert calls == 1
+
+
+def test_curate_fusion_reuses_persistent_cache(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records_for_queries",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="LMNA NTRK1 fusion evidence",
+                abstract="LMNA::NTRK1 fusions are oncogenic in soft tissue tumors.",
+            )
+        ],
+    )
+
+    calls = 0
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            nonlocal calls
+            calls += 1
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"fusion":"LMNA::NTRK1","fusion_literature_identified":true,'
+                            '"cancer_associated":true,'
+                            '"rationale":"LMNA::NTRK1 has fusion-specific evidence.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    first = gene_curation.curate_fusion("LMNA::NTRK1", anthropic_api_key="configured")
+    second = gene_curation.curate_fusion("LMNA::NTRK1", anthropic_api_key="configured")
+
+    assert first == second
+    assert first["supporting_pmids"] == ["123"]
+    assert calls == 1
+
+
 def test_curate_gene_parses_json_wrapped_in_markdown_fence(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(
         gene_curation,
         "retrieve_pubmed_records",
@@ -301,7 +596,210 @@ def test_curate_gene_parses_json_wrapped_in_markdown_fence(monkeypatch):
     assert result["supporting_pmids"] == ["123"]
 
 
+def test_curate_fusion_parses_json_from_unclosed_markdown_fence(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records_for_queries",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="EML4 ALK fusion evidence",
+                abstract="EML4 ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            "```json\n"
+                            '{"fusion":"EML4::ALK","fusion_literature_identified":true,'
+                            '"cancer_associated":true,'
+                            '"rationale":"EML4::ALK has fusion-specific evidence.",'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = gene_curation.curate_fusion("EML4::ALK", anthropic_api_key="configured")
+
+    assert result["fusion_literature_identified"] is True
+    assert result["rationale"] == "EML4::ALK has fusion-specific evidence."
+    assert result["supporting_pmids"] == ["123"]
+
+
+def test_curate_fusion_salvages_fields_from_incomplete_json(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records_for_queries",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="EML4 ALK fusion evidence",
+                abstract="EML4 ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text='{"fusion":"EML4::ALK","rationale":"missing closing brace"',
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = gene_curation.curate_fusion("EML4::ALK", anthropic_api_key="configured")
+
+    assert result["fusion"] == "EML4::ALK"
+    assert result["rationale"] == "missing closing brace"
+    assert '"fusion"' not in result["rationale"]
+
+
+def test_cached_json_blob_rationale_is_repaired(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records_for_queries",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="EML4 ALK fusion evidence",
+                abstract="EML4 ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"fusion":"EML4::ALK","fusion_literature_identified":true,'
+                            '"cancer_associated":true,'
+                            '"rationale":"{\\"fusion\\":\\"EML4::ALK\\",'
+                            '\\"rationale\\":\\"Recovered rationale.\\",'
+                            '\\"literature_structural_support\\":true,'
+                            '\\"structural_supporting_pmids\\":[\\"123\\"],'
+                            '\\"supporting_pmids\\":[\\"123\\"]}",'
+                            '"supporting_pmids":[],"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = gene_curation.curate_fusion("EML4::ALK", anthropic_api_key="configured")
+
+    assert result["rationale"] == "Recovered rationale."
+    assert result["supporting_pmids"] == ["123"]
+    assert result["literature_structural_support"] is True
+    assert result["structural_supporting_pmids"] == ["123"]
+
+
+def test_cached_incomplete_json_blob_rationale_salvages_nested_fields(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records_for_queries",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="EML4 ALK fusion evidence",
+                abstract="EML4 ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"fusion":"EML4::ALK","fusion_literature_identified":null,'
+                            '"cancer_associated":null,'
+                            '"rationale":"{\\"fusion\\":\\"EML4::ALK\\",'
+                            '\\"fusion_literature_identified\\":true,'
+                            '\\"cancer_associated\\":true,'
+                            '\\"rationale\\":\\"Recovered rationale.\\",'
+                            '\\"literature_structural_support\\":true,'
+                            '\\"structural_supporting_pmids\\":[\\"123\\"],'
+                            '\\"supporting_pmids\\":[\\"123\\"]",'
+                            '"supporting_pmids":[],"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":true}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    result = gene_curation.curate_fusion("EML4::ALK", anthropic_api_key="configured")
+
+    assert result["fusion_literature_identified"] is True
+    assert result["cancer_associated"] is True
+    assert result["rationale"] == "Recovered rationale."
+    assert result["supporting_pmids"] == ["123"]
+    assert result["literature_structural_support"] is True
+    assert result["structural_supporting_pmids"] == ["123"]
+
+
 def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(
         gene_curation,
         "retrieve_pubmed_records",
@@ -326,6 +824,9 @@ def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
                         text=(
                             '{"gene":"ALK","cancer_associated":true,'
                             '"rationale":"ALK has concise functional cancer evidence.",'
+                            '"gene_summary":"ALK fusion evidence supports cancer relevance.",'
+                            '"supporting_citation_quotes":[{"pmid":"123",'
+                            '"quote":"ALK fusions are oncogenic in lung cancer."}],'
                             '"supporting_pmids":["123"],'
                             '"retrieved_pmids":["123"],'
                             '"insufficient_evidence":false}'
@@ -344,15 +845,26 @@ def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
         SimpleNamespace(Anthropic=FakeAnthropic),
     )
 
-    gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        tumor_type="lung cancer",
+    )
 
     assert "1-2 short sentences" in seen["prompt"]
     assert "40-75 words" in seen["prompt"]
     assert "Do not enumerate every paper" in seen["prompt"]
+    assert "Tumor type supplied by user: lung cancer" in seen["prompt"]
+    assert "supporting_citation_quotes" in seen["prompt"]
     assert "fast curator review" in seen["system"]
+    assert result["gene_summary"] == "ALK fusion evidence supports cancer relevance."
+    assert result["supporting_citation_quotes"] == [
+        {"pmid": "123", "quote": "ALK fusions are oncogenic in lung cancer."}
+    ]
 
 
 def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(
         gene_curation,
         "retrieve_pubmed_records",
@@ -420,6 +932,139 @@ def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):
     assert "ENST00000389048" in seen["prompt"]
     assert "domain_status=retained" in seen["prompt"]
     assert result["fusion_contexts"][0]["fusion"] == "EML4::ALK"
+    assert result["fusion_contexts"][0]["retained_domains"] == ()
+    assert result["fusion_contexts"][0]["kinase_domain_status"] is None
+
+
+def test_curate_gene_returns_domain_context_only_when_literature_structurally_supports_it(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"The literature describes retained ALK kinase domain signaling.",'
+                            '"literature_structural_support":true,'
+                            '"structural_supporting_pmids":["123"],'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        fusion_contexts=[context],
+    )
+
+    returned_context = result["fusion_contexts"][0]
+    assert returned_context["retained_domains"] == ("Protein kinase domain (1116-1383)",)
+    assert returned_context["kinase_gene"] == "ALK"
+    assert returned_context["kinase_domain_status"] == "retained"
+
+
+def test_curate_gene_omits_domain_context_when_only_rationale_mentions_domain(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"The literature describes ALK kinase signaling.",'
+                            '"literature_structural_support":false,'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        fusion_contexts=[context],
+    )
+
+    returned_context = result["fusion_contexts"][0]
+    assert returned_context["retained_domains"] == ()
+    assert returned_context["kinase_gene"] is None
+    assert returned_context["kinase_domain_status"] is None
 
 
 def test_fusion_context_marks_gene_pair_only_when_annotation_unavailable():
@@ -542,6 +1187,48 @@ def test_curate_gene_prompt_warns_against_position_claims_for_gene_pair_only(mon
     assert result["fusion_contexts"][0]["breakpoint_context_available"] is False
 
 
+def test_pubmed_queries_include_breakpoint_and_transcript_context():
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        five_transcript="ENST00000318522",
+        three_transcript="ENST00000389048",
+        five_exon="13",
+        three_exon="20",
+        five_genomic="chr2:42491871",
+        three_genomic="chr2:29446394",
+        five_protein_breakpoint="p.496",
+        three_protein_breakpoint="p.1059",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    gene_queries = gene_curation._pubmed_queries("ALK", [context])
+    fusion_queries = gene_curation._fusion_pubmed_queries("EML4::ALK", [context])
+
+    assert (
+        '"EML4-ALK" AND (breakpoint OR variant OR exon OR transcript OR frame)'
+        in gene_queries
+    )
+    assert (
+        '"ALK" AND "EML4" AND "exon 20" AND "exon 13"'
+        in gene_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000389048"' in gene_queries
+    assert '"EML4-ALK" AND "chr2:29446394"' in gene_queries
+    assert '"EML4-ALK" AND "p.1059"' in gene_queries
+    assert (
+        '"EML4" AND "ALK" AND "exon 13" AND "exon 20"'
+        in fusion_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000318522"' in fusion_queries
+    assert '"EML4-ALK" AND "p.496"' in fusion_queries
+
+
 def test_curate_fusion_genes_passes_token_controls(monkeypatch):
     class Fusion:
         five_gene = "EML4"
@@ -645,3 +1332,37 @@ def test_curate_fusion_genes_force_gene_calls_when_requested(monkeypatch):
 
     assert called_genes == ["LMNA", "NTRK1"]
     assert [item["gene"] for item in result["genes"]] == ["LMNA", "NTRK1"]
+
+
+def test_curate_fusion_genes_filters_requested_genes(monkeypatch):
+    class Fusion:
+        five_gene = "LMNA"
+        three_gene = "NTRK1"
+
+    called_genes = []
+
+    def fake_curate_fusion(fusion, **kwargs):
+        return {
+            "fusion": fusion,
+            "fusion_literature_identified": True,
+            "supporting_pmids": ["1"],
+            "insufficient_evidence": False,
+        }
+
+    def fake_curate_gene(gene, **kwargs):
+        called_genes.append(gene)
+        return {"gene": gene, "insufficient_evidence": True}
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+    monkeypatch.setenv("FUSION_GENE_CURATION_WORKERS", "1")
+    monkeypatch.setattr(gene_curation, "curate_fusion", fake_curate_fusion)
+    monkeypatch.setattr(gene_curation, "curate_gene", fake_curate_gene)
+
+    result = gene_curation.curate_fusion_genes(
+        [Fusion()],
+        force_gene_curation=True,
+        requested_genes=["NTRK1"],
+    )
+
+    assert called_genes == ["NTRK1"]
+    assert [item["gene"] for item in result["genes"]] == ["NTRK1"]

@@ -10,4 +10,5 @@ export const DEFAULT_PARAMS: AnnotateParams = {
   five_transcript: "",
   three_transcript: "",
   genome_build: "GRCh38",
+  tumor_type: "",
 };

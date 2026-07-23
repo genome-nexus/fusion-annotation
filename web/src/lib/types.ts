@@ -162,6 +162,9 @@ export interface GeneCurationGeneResult {
   gene: string;
   cancer_associated?: boolean | null;
   rationale?: string;
+  cancer_association_rationale?: string;
+  gene_summary?: string;
+  supporting_citation_quotes?: { pmid: string; quote: string }[];
   supporting_pmids?: string[];
   retrieved_pmids?: string[];
   fusion_contexts?: GeneFusionCurationContext[];
@@ -181,6 +184,7 @@ export interface GeneCurationFusionResult {
   fusion_literature_identified?: boolean | null;
   cancer_associated?: boolean | null;
   rationale?: string;
+  supporting_citation_quotes?: { pmid: string; quote: string }[];
   supporting_pmids?: string[];
   retrieved_pmids?: string[];
   fusion_contexts?: GeneFusionCurationContext[];
@@ -205,6 +209,7 @@ export interface AnnotateParams {
   five_transcript?: string;
   three_transcript?: string;
   genome_build: string;
+  tumor_type?: string;
   variant_type?: string;
   input_mode?: "exon" | "genomic" | "gene_pair";
 }

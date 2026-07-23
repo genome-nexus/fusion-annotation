@@ -23,6 +23,7 @@ interface Props {
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
   onForceGeneCuration?: () => void;
+  onCurateGene?: (gene: string) => void;
   onExportGeneCurationCsv?: () => void;
 }
 
@@ -197,11 +198,23 @@ function pubmedUrl(pmid: string) {
   return `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
 }
 
-function confidenceLabel(item?: GeneCurationGeneResult | GeneCurationFusionResult) {
-  if (!item || item.insufficient_evidence) return "Low";
-  if (item.cancer_associated === true) return "Higher";
-  if (item.cancer_associated === false) return "Lower";
-  return "Uncertain";
+function renderSupportingQuotes(quotes?: { pmid: string; quote: string }[]) {
+  if (!quotes?.length) return null;
+  return (
+    <div className="pmid-row quote-row">
+      <strong>Supporting abstract quotes</strong>
+      <ul>
+        {quotes.map((item) => (
+          <li key={`${item.pmid}-${item.quote}`}>
+            <a href={pubmedUrl(item.pmid)} target="_blank" rel="noopener noreferrer">
+              PMID {item.pmid}
+            </a>
+            : "{item.quote}"
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
 }
 
 function renderFusionContext(context: GeneFusionCurationContext) {
@@ -218,6 +231,16 @@ function renderFusionContext(context: GeneFusionCurationContext) {
         genomic: context.three_genomic,
         protein: context.three_protein_breakpoint,
       };
+  const domainText = [
+    `retained: ${formatDomainList(context.retained_domains)}`,
+    `lost/disrupted: ${formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}`,
+  ].join(" · ");
+  const hasDomainContext = Boolean(
+    context.retained_domains?.length
+      || context.lost_domains?.length
+      || context.disrupted_domains?.length,
+  );
+  const hasKinaseContext = Boolean(context.kinase_gene || context.kinase_domain_status);
   return (
     <div className="fusion-curation-context" key={`${context.gene}-${context.fusion}-${context.side}`}>
       <div className="fusion-curation-context-title">
@@ -237,15 +260,20 @@ function renderFusionContext(context: GeneFusionCurationContext) {
           tx {breakpoint.transcript || "unknown"} · exon {breakpoint.exon || "unknown"} · genomic{" "}
           {breakpoint.genomic || "unknown"} · protein {breakpoint.protein || "unknown"}
         </dd>
-        <dt>Domains</dt>
-        <dd>
-          retained: {formatDomainList(context.retained_domains)} · lost/disrupted:{" "}
-          {formatDomainList([...(context.lost_domains || []), ...(context.disrupted_domains || [])])}
-        </dd>
-        <dt>Kinase</dt>
-        <dd>
-          {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
-        </dd>
+        {hasDomainContext && (
+          <>
+            <dt>Literature-referenced domains</dt>
+            <dd>{domainText}</dd>
+          </>
+        )}
+        {hasKinaseContext && (
+          <>
+            <dt>Literature-referenced kinase context</dt>
+            <dd>
+              {context.kinase_gene || "unknown"} · {context.kinase_domain_status || "unknown"}
+            </dd>
+          </>
+        )}
       </dl>
       {context.limitations && context.limitations.length > 0 && (
         <ul className="fusion-curation-limitations">
@@ -270,6 +298,7 @@ function GeneInformationSection({
   geneCurationError = null,
   onCurateGenes,
   onForceGeneCuration,
+  onCurateGene,
   onExportGeneCurationCsv,
 }: {
   result: AnnotationResult;
@@ -280,6 +309,7 @@ function GeneInformationSection({
   geneCurationError?: ApiError | null;
   onCurateGenes?: () => void;
   onForceGeneCuration?: () => void;
+  onCurateGene?: (gene: string) => void;
   onExportGeneCurationCsv?: () => void;
 }) {
   const genes = [
@@ -344,7 +374,7 @@ function GeneInformationSection({
             <span className="gene-info-symbol">{result.interface.categorical_key}</span>
             <span className="gene-info-summary">
               {fusionItem
-                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · confidence ${confidenceLabel(fusionItem)}`
+                ? fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"
                 : "No fusion-specific literature curation loaded"}
             </span>
           </summary>
@@ -371,8 +401,6 @@ function GeneInformationSection({
                   <dd>
                     {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
                   </dd>
-                  <dt>Confidence</dt>
-                  <dd>{confidenceLabel(fusionItem)}</dd>
                   <dt>Rationale</dt>
                   <dd>{fusionItem.rationale || "No rationale returned."}</dd>
                 </dl>
@@ -396,6 +424,7 @@ function GeneInformationSection({
                       : "None selected"}
                   </span>
                 </div>
+                {renderSupportingQuotes(fusionItem.supporting_citation_quotes)}
                 <div className="pmid-row">
                   <strong>Retrieved PMIDs</strong>
                   <span>{fusionItem.retrieved_pmids?.join(", ") || "None retrieved"}</span>
@@ -435,9 +464,23 @@ function GeneInformationSection({
                 <span className="gene-info-symbol">{gene}</span>
                 <span className="gene-info-summary">
                   {item
-                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
+                    ? item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"
                     : "No gene details loaded"}
                 </span>
+                {onCurateGene && (
+                  <button
+                    type="button"
+                    className="secondary-button gene-info-summary-action"
+                    disabled={!geneCurationEnabled || geneCurationLoading}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onCurateGene(gene);
+                    }}
+                  >
+                    {item ? "Refresh gene details" : "Get gene details"}
+                  </button>
+                )}
               </summary>
               {item ? (
                 item.error ? (
@@ -491,10 +534,10 @@ function GeneInformationSection({
                       )}
                       <dt>Known driver signal</dt>
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
-                      <dt>Confidence</dt>
-                      <dd>{confidenceLabel(item)}</dd>
                       <dt>Rationale</dt>
                       <dd>{item.rationale || "No rationale returned."}</dd>
+                      <dt>Gene summary</dt>
+                      <dd>{item.gene_summary || item.oncokb_summary || item.oncokb_background || "No summary returned."}</dd>
                       <dt>Fusion knowledge</dt>
                       <dd>{result.knowledge.oncogenic ?? "No fusion-level knowledge-base signal returned."}</dd>
                     </dl>
@@ -518,6 +561,7 @@ function GeneInformationSection({
                           : "None selected"}
                       </span>
                     </div>
+                    {renderSupportingQuotes(item.supporting_citation_quotes)}
                     <div className="pmid-row">
                       <strong>Retrieved PMIDs</strong>
                       <span>{item.retrieved_pmids?.join(", ") || "None retrieved"}</span>
@@ -549,6 +593,7 @@ export function ResultView({
   geneCurationError,
   onCurateGenes,
   onForceGeneCuration,
+  onCurateGene,
   onExportGeneCurationCsv,
 }: Props) {
   const { interface: iface, knowledge, resolved, warnings } = result;
@@ -711,6 +756,7 @@ export function ResultView({
         geneCurationError={geneCurationError}
         onCurateGenes={onCurateGenes}
         onForceGeneCuration={onForceGeneCuration}
+        onCurateGene={onCurateGene}
         onExportGeneCurationCsv={onExportGeneCurationCsv}
       />
 

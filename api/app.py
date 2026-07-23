@@ -103,6 +103,10 @@ class AnnotateRequest(BaseModel):
         "GRCh38", description="Genome assembly the coordinates/transcripts come from. GRCh38 (default) or GRCh37.")
     species: str = Field(
         "homo_sapiens", description="Species identifier. Non-human species always use RestDataProvider.")
+    tumor_type: Optional[str] = Field(
+        None,
+        description="Optional tumor type context used to focus literature curation.",
+    )
 
     @field_validator("five_exon", "three_exon", mode="before")
     @classmethod
@@ -125,9 +129,25 @@ class BatchAnnotateRequest(BaseModel):
         min_length=1,
         description="Fusion annotations to run in one request.",
     )
+
+
+class GeneCurationRequest(BaseModel):
+    fusions: list[AnnotateRequest] = Field(
+        ...,
+        min_length=1,
+        description="Fusion annotations to curate.",
+    )
     force_gene_curation: bool = Field(
         False,
         description="When true, run per-gene literature curation even if exact fusion literature is sufficient.",
+    )
+    genes: list[str] = Field(
+        default_factory=list,
+        description="Optional gene symbols to curate; omitted means use the automatic fusion/gene fallback policy.",
+    )
+    tumor_type: Optional[str] = Field(
+        None,
+        description="Optional tumor type context used to focus literature curation.",
     )
 
 
@@ -308,7 +328,7 @@ def gene_curation_status() -> dict:
 
 @app.post("/api/gene-curation", response_model=GeneCurationResponse)
 @limiter.limit(RATE_LIMIT)
-def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # noqa: ARG001
+def gene_curation(request: Request, params: GeneCurationRequest) -> dict:  # noqa: ARG001
     """Run server-side literature curation with Genome Nexus fusion context."""
     try:
         annotation_results = [
@@ -319,6 +339,8 @@ def gene_curation(request: Request, params: BatchAnnotateRequest) -> dict:  # no
             params.fusions,
             annotation_results=annotation_results,
             force_gene_curation=params.force_gene_curation,
+            requested_genes=params.genes,
+            tumor_type=params.tumor_type,
         )
     except GeneCurationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

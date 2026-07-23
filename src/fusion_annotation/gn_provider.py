@@ -8,14 +8,15 @@ REST dependency.  Per-annotation latency drops from ~50–95 s to ~1–2 s by:
   * Fetching the CDS nucleotide sequence from UCSC in one regional call and
     assembling it from the exon table, removing the two Ensembl /sequence calls.
   * Parallelising the two partner lookups with ``ThreadPoolExecutor``.
-  * Serving chromosome from a bundled static map (zero-latency hot path) with
-    NCBI esummary as a fallback for unlisted genes.
+  * Resolving chromosome from HGNC/HUGO symbol metadata with NCBI esummary as
+    a fallback.
   * Keeping the CIViC knowledge query unchanged.
 
 Sources
 -------
   - Genome Nexus (https://grch38.genomenexus.org / https://www.genomenexus.org)
   - UCSC Genome Browser REST API (https://api.genome.ucsc.edu)
+  - HGNC REST API (https://rest.genenames.org) — primary symbol chrom lookup
   - NCBI eutils (https://eutils.ncbi.nlm.nih.gov)  — fallback chrom lookup only
   - CIViC GraphQL (https://civicdb.org/api/graphql)
   - InterPro API (https://www.ebi.ac.uk/interpro) — optional enrichment, on by default
@@ -29,15 +30,14 @@ See issue #13 for the full design rationale.
 """
 from __future__ import annotations
 
-import os
-import time
-import urllib.request
 import json
+import os
+import re
+import time
+import urllib.parse
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, wait as futures_wait, FIRST_EXCEPTION
-from functools import lru_cache
 from typing import Optional
-
-import requests
 
 from .core import Transcript, translate, build_exon_cds_map, build_exon_genomic_map
 from .rest_provider import (
@@ -54,62 +54,60 @@ _GN_BASES = {
 }
 _UCSC_GENOMES = {"GRCh38": "hg38", "GRCh37": "hg19"}
 _UCSC_SEQ_BASE = "https://api.genome.ucsc.edu/getData/sequence"
+_HGNC_BASE = "https://rest.genenames.org"
 _NCBI_ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 _NCBI_ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-
-# ---------------------------------------------------------------------------
-# Static gene → chromosome map (NCBI convention: "2", "X", "MT")
-# Covers the most common fusion / oncology genes so the hot path needs no
-# network call. NCBI esummary is used as a fallback for unlisted genes.
-# ---------------------------------------------------------------------------
-_GENE_CHROM: dict[str, str] = {
-    "ABL1": "9",    "ABL2": "1",    "AKT1": "14",   "AKT2": "19",   "AKT3": "1",
-    "ALK": "2",     "APC": "5",     "AR": "X",      "ARID1A": "1",  "ARID1B": "6",
-    "ASXL1": "20",  "ASXL2": "2",   "ATM": "11",    "ATRX": "X",    "AXIN1": "16",
-    "AXIN2": "17",  "AXL": "19",    "BARD1": "2",   "BCL2": "18",   "BCL6": "3",
-    "BCL11B": "14", "BCR": "22",    "BRAF": "7",    "BRCA1": "17",  "BRCA2": "13",
-    "BRIP1": "17",  "BRD4": "19",   "BMPR1A": "10", "CALR": "19",   "CBL": "11",
-    "CBLB": "3",    "CBFB": "16",   "CCDC6": "10",  "CCND1": "11",  "CCND2": "12",
-    "CCND3": "6",   "CCNE1": "19",  "CD74": "5",    "CDH1": "16",   "CDK4": "12",
-    "CDK6": "7",    "CDKN1B": "12", "CDKN2A": "9",  "CDKN2B": "9",  "CEBPA": "19",
-    "CHEK1": "11",  "CHEK2": "22",  "CIC": "19",    "CREBBP": "16", "CRTC1": "19",
-    "CSF1R": "5",   "CSF3R": "1",   "CTCF": "16",   "CTNNB1": "3",  "DAXX": "6",
-    "DDR2": "1",    "DNMT3A": "2",  "DNMT3B": "20", "EBF1": "5",    "EGFR": "7",
-    "EML4": "2",    "EP300": "22",  "EPCAM": "2",   "ERBB2": "17",  "ERBB3": "12",
-    "ERBB4": "2",   "ERG": "21",    "ESR1": "6",    "ETV1": "7",    "ETV4": "17",
-    "ETV5": "3",    "ETV6": "12",   "EWSR1": "22",  "EZH2": "7",    "FGFR1": "8",
-    "FGFR2": "10",  "FGFR3": "4",   "FGFR4": "5",   "FIP1L1": "4",  "FLI1": "11",
-    "FLT3": "13",   "FOXA1": "14",  "FOXO1": "13",  "FOXO3": "6",   "FOXO4": "X",
-    "FOXP1": "3",   "GATA2": "3",   "GATA3": "10",  "GNA11": "19",  "GNAQ": "9",
-    "GNAS": "20",   "GREM1": "15",  "HMGA2": "12",  "HRAS": "11",   "IDH1": "2",
-    "IDH2": "15",   "IGH": "14",    "IGK": "2",     "IGL": "22",    "IKZF1": "7",
-    "JAK1": "1",    "JAK2": "9",    "JAK3": "19",   "KIF5B": "10",  "KIT": "4",
-    "KMT2A": "11",  "KRAS": "12",   "LMNA": "1",    "MAP2K1": "15", "MAP2K2": "19",
-    "MAML2": "11",  "MDM2": "12",   "MDM4": "1",    "MED12": "X",   "MET": "7",
-    "MLH1": "3",    "MLLT1": "19",  "MLLT3": "9",   "MLLT4": "6",   "MLLT6": "17",
-    "MLLT10": "10", "MPL": "1",     "MSH2": "2",    "MSH6": "2",    "MUTYH": "1",
-    "MYC": "8",     "MYH11": "16",  "MYH9": "22",   "NBN": "8",     "NCOA4": "10",
-    "NF1": "17",    "NF2": "22",    "NKX2-1": "14", "NOTCH1": "9",  "NOTCH2": "1",
-    "NPM1": "5",    "NRAS": "1",    "NRG1": "8",    "NSD1": "5",    "NTHL1": "16",
-    "NTRK1": "1",   "NTRK2": "9",   "NTRK3": "15",  "NUTM1": "15",  "NUP98": "11",
-    "NUP214": "9",  "PAX3": "2",    "PAX5": "9",    "PAX7": "1",    "PAX8": "2",
-    "PBX1": "1",    "PDGFRA": "4",  "PDGFRB": "5",  "PIK3CA": "3",  "PIK3CB": "3",
-    "PIK3R1": "5",  "PML": "15",    "PMS2": "7",    "POLD1": "19",  "POLE": "12",
-    "PPARG": "3",   "PTCH1": "9",   "PTEN": "10",   "RAD21": "8",   "RAD51C": "17",
-    "RAD51D": "17", "RARA": "17",   "RB1": "13",    "RET": "10",    "RNF43": "17",
-    "ROS1": "6",    "RUNX1": "21",  "RUNX1T1": "8", "SF3B1": "2",   "SETD2": "3",
-    "SLC34A2": "4", "SMAD2": "18",  "SMAD4": "18",  "SMC1A": "X",   "SMC3": "10",
-    "SMARCA4": "19","SMARCB1": "22","SS18": "18",   "SS18L1": "20", "SSX1": "X",
-    "SSX2": "X",    "STAG2": "X",   "STAT3": "17",  "STAT5A": "17", "STAT5B": "17",
-    "STK11": "19",  "SUFU": "10",   "TACC3": "4",   "TCF3": "19",   "TET2": "4",
-    "TGFBR1": "9",  "TGFBR2": "3",  "TMPRSS2": "21","TP53": "17",   "TPM3": "1",
-    "TRA": "14",    "TRB": "7",     "TRD": "14",    "TRG": "7",     "TSC1": "9",
-    "TSC2": "16",   "U2AF1": "21",  "VHL": "3",     "WT1": "11",    "ZRSR2": "X",
-}
 
 # Threshold above which we switch to per-exon UCSC fetches instead of one
 # region call (avoids multi-MB payloads for very large genes).
 _REGION_FETCH_MAX_SPAN_BP = 2_000_000
+
+_HGNC_LOCATION_RE = re.compile(r"^(?:chr)?(?P<chrom>[1-9]|1[0-9]|2[0-2]|X|Y|MT|M)(?=[pq]|$)", re.IGNORECASE)
+
+
+def _chrom_from_hgnc_location(location: str | None) -> str | None:
+    """Convert an HGNC cytogenetic location like '17q21.31' to UCSC chrom."""
+    if not location:
+        return None
+    match = _HGNC_LOCATION_RE.match(location.strip())
+    if not match:
+        return None
+    chrom = match.group("chrom").upper()
+    return _chrom_to_ucsc("MT" if chrom == "M" else chrom)
+
+
+def _hgnc_docs(field: str, term: str) -> list[dict]:
+    encoded = urllib.parse.quote(term, safe="")
+    url = f"{_HGNC_BASE}/fetch/{field}/{encoded}"
+    req = urllib.request.Request(url, headers={**dict(_UA), "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        payload = json.loads(resp.read())
+    return payload.get("response", {}).get("docs", [])
+
+
+def _best_hgnc_doc(docs: list[dict], symbol: str) -> dict | None:
+    if not docs:
+        return None
+    sym = symbol.upper()
+    for doc in docs:
+        if doc.get("status") == "Approved" and doc.get("symbol", "").upper() == sym:
+            return doc
+    for doc in docs:
+        if doc.get("status") == "Approved":
+            return doc
+    return docs[0]
+
+
+def _hgnc_chrom(symbol: str) -> str | None:
+    """Resolve approved or alias HGNC symbol to UCSC chromosome."""
+    try:
+        doc = _best_hgnc_doc(_hgnc_docs("symbol", symbol), symbol)
+        if not doc:
+            alias_docs = _hgnc_docs("alias_symbol", symbol) + _hgnc_docs("prev_symbol", symbol)
+            doc = _best_hgnc_doc(alias_docs, symbol)
+        return _chrom_from_hgnc_location(doc.get("location") if doc else None)
+    except Exception:
+        return None
 
 
 def _ncbi_chrom(symbol: str) -> str | None:
@@ -249,20 +247,21 @@ class GenomeNexusDataProvider:
     def _resolve_chrom(self, gene_symbol: str) -> str:
         """Return UCSC-format chromosome for gene_symbol (e.g. 'chr2', 'chrX')."""
         sym = gene_symbol.upper()
-        # Static map (fast path)
-        if sym in _GENE_CHROM:
-            return _chrom_to_ucsc(_GENE_CHROM[sym])
-        # Instance cache (populated by NCBI fallback on first miss)
         if sym in self._chrom_cache:
             return self._chrom_cache[sym]
-        # NCBI esummary fallback
+
+        hgnc = _hgnc_chrom(gene_symbol)
+        if hgnc:
+            self._chrom_cache[sym] = hgnc
+            return hgnc
+
         ncbi = _ncbi_chrom(gene_symbol)
         if ncbi:
             self._chrom_cache[sym] = _chrom_to_ucsc(ncbi)
             return self._chrom_cache[sym]
         raise ValueError(
             f"could not determine chromosome for gene {gene_symbol!r}; "
-            "add it to the static _GENE_CHROM map or ensure NCBI eutils is reachable.")
+            "ensure HGNC or NCBI eutils is reachable.")
 
     def _fetch_gn_tx(self, gene_or_tx: str) -> tuple[dict, bool]:
         """Fetch raw GN transcript dict; return (data, is_canonical)."""

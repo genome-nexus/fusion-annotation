@@ -28,9 +28,10 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+import fusion_annotation.gn_provider as gn_provider
 from fusion_annotation.gn_provider import (
     GenomeNexusDataProvider, _pfam_to_domain_dicts, _cds_bounds_from_utrs,
-    _assemble_cds, _rc,
+    _assemble_cds, _chrom_from_hgnc_location, _hgnc_chrom, _rc,
 )
 from fusion_annotation.core import (
     Transcript, build_exon_cds_map, build_exon_genomic_map, annotate_fusion,
@@ -197,6 +198,44 @@ def test_pfam_to_domain_dicts():
     assert d["start"] == 733
     assert d["end"] == 961
     assert d["name"] == "Protein kinase domain"
+
+
+def test_chrom_from_hgnc_location():
+    assert _chrom_from_hgnc_location("17q21.31") == "chr17"
+    assert _chrom_from_hgnc_location("Xq28") == "chrX"
+    assert _chrom_from_hgnc_location("MT") == "chrM"
+    assert _chrom_from_hgnc_location("unplaced") is None
+
+
+def test_hgnc_chrom_uses_symbol_or_alias_docs(monkeypatch):
+    def fake_docs(field: str, term: str) -> list[dict]:
+        assert term == "CRACD"
+        if field == "symbol":
+            return [{"symbol": "CRACD", "status": "Approved", "location": "4q32.3"}]
+        return []
+
+    monkeypatch.setattr(gn_provider, "_hgnc_docs", fake_docs)
+    assert _hgnc_chrom("CRACD") == "chr4"
+
+    def fake_alias_docs(field: str, term: str) -> list[dict]:
+        assert term == "OLDCRACD"
+        if field == "alias_symbol":
+            return [{"symbol": "CRACD", "status": "Approved", "location": "4q32.3"}]
+        return []
+
+    monkeypatch.setattr(gn_provider, "_hgnc_docs", fake_alias_docs)
+    assert _hgnc_chrom("OLDCRACD") == "chr4"
+
+
+def test_resolve_chrom_prefers_hgnc_over_ncbi(monkeypatch):
+    provider = GenomeNexusDataProvider(assembly="GRCh38", interpro_enrichment=False)
+    monkeypatch.setattr(gn_provider, "_hgnc_chrom", lambda symbol: "chr4" if symbol == "CRACD" else None)
+
+    def fail_ncbi(symbol: str) -> str | None:
+        raise AssertionError("NCBI should not be called when HGNC resolves the symbol")
+
+    monkeypatch.setattr(gn_provider, "_ncbi_chrom", fail_ncbi)
+    assert provider._resolve_chrom("CRACD") == "chr4"
 
 
 # ---------------------------------------------------------------------------
@@ -470,7 +509,8 @@ def test_protein_length_mismatch_warning():
 
     with patch.object(p, "_fetch_gn_tx", side_effect=_fake_fetch), \
          patch.object(p, "_fetch_cds_sequence", side_effect=_fake_cds), \
-         patch.object(p, "_rest_fallback_transcript", return_value=None):
+         patch.object(p, "_rest_fallback_transcript", return_value=None), \
+         patch.object(p, "_resolve_chrom", return_value="chr2"):
         tx = p.get_transcript("ALK")
 
     assert p._domain_warning is not None

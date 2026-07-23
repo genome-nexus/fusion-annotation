@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import json
+import logging
 import os
+from pathlib import Path
+import tempfile
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -12,9 +16,11 @@ from dataclasses import asdict
 from dataclasses import field
 from time import monotonic
 from time import sleep
+from time import time
 from typing import Any
 from typing import Iterable
 from typing import Optional
+from typing import Protocol
 
 import requests
 
@@ -23,6 +29,7 @@ ESEARCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 EFETCH_URL = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
 DEFAULT_ONCOKB_API_BASE_URL = "https://www.oncokb.org/api/v1"
 DEFAULT_CURATION_MODEL = "claude-haiku-4-5-20251001"
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -124,6 +131,277 @@ class NcbiClient:
                 sleep(wait_seconds)
                 now = monotonic()
             self._next_request_at = now + (self.min_interval_seconds or 0.0)
+
+
+def _cache_enabled() -> bool:
+    return os.environ.get("FUSION_GENE_CURATION_CACHE", "1").lower() not in {"0", "false", "no"}
+
+
+def _cache_dir() -> Path:
+    override = os.environ.get("FUSION_GENE_CURATION_CACHE_DIR")
+    if override:
+        return Path(override)
+    return Path(tempfile.gettempdir()) / "fusion-annotation" / "gene-curation-cache"
+
+
+def _stable_cache_key(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _text_digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _safe_namespace(namespace: str) -> str:
+    return "".join(
+        char if char.isalnum() or char in {"-", "_"} else "_"
+        for char in namespace
+    )
+
+
+class CacheBackend(Protocol):
+    def read(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        ttl_seconds: int = 0,
+    ) -> Optional[Any]:
+        """Return a cached value, or None on miss/stale/error."""
+
+    def write(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        value: Any,
+        ttl_seconds: int = 0,
+    ) -> None:
+        """Persist a JSON-serializable cached value."""
+
+
+class NullCacheBackend:
+    def read(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        ttl_seconds: int = 0,
+    ) -> Optional[Any]:
+        return None
+
+    def write(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        value: Any,
+        ttl_seconds: int = 0,
+    ) -> None:
+        return None
+
+
+class FileCacheBackend:
+    def __init__(self, cache_dir: Path):
+        self.cache_dir = cache_dir
+
+    def _path(self, namespace: str, key_payload: dict[str, Any]) -> Path:
+        return (
+            self.cache_dir
+            / _safe_namespace(namespace)
+            / f"{_stable_cache_key(key_payload)}.json"
+        )
+
+    def read(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        ttl_seconds: int = 0,
+    ) -> Optional[Any]:
+        path = self._path(namespace, key_payload)
+        if not path.exists():
+            return None
+        if ttl_seconds > 0 and time() - path.stat().st_mtime > ttl_seconds:
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def write(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        value: Any,
+        ttl_seconds: int = 0,
+    ) -> None:
+        path = self._path(namespace, key_payload)
+        tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(
+                json.dumps(value, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            os.replace(tmp_path, path)
+        except OSError:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+class RedisCacheBackend:
+    def __init__(self, redis_url: str, prefix: str):
+        try:
+            import redis
+        except ImportError as exc:
+            raise RuntimeError(
+                "Redis cache backend requires the optional `redis` package."
+            ) from exc
+        self.client = redis.Redis.from_url(redis_url)
+        self.prefix = prefix
+
+    def _key(self, namespace: str, key_payload: dict[str, Any]) -> str:
+        return f"{self.prefix}:{_safe_namespace(namespace)}:{_stable_cache_key(key_payload)}"
+
+    def read(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        ttl_seconds: int = 0,
+    ) -> Optional[Any]:
+        try:
+            raw = self.client.get(self._key(namespace, key_payload))
+        except Exception as exc:  # pragma: no cover - depends on Redis runtime
+            logger.warning("Redis curation cache read failed: %s", exc)
+            return None
+        if not raw:
+            return None
+        try:
+            cached = json.loads(raw)
+        except (ValueError, TypeError):
+            return None
+        if (
+            ttl_seconds > 0
+            and time() - float(cached.get("stored_at", 0)) > ttl_seconds
+        ):
+            return None
+        return cached.get("value")
+
+    def write(
+        self,
+        namespace: str,
+        key_payload: dict[str, Any],
+        value: Any,
+        ttl_seconds: int = 0,
+    ) -> None:
+        payload = {"stored_at": time(), "value": value}
+        try:
+            kwargs = {"ex": ttl_seconds} if ttl_seconds > 0 else {}
+            self.client.set(
+                self._key(namespace, key_payload),
+                json.dumps(payload, sort_keys=True),
+                **kwargs,
+            )
+        except Exception as exc:  # pragma: no cover - depends on Redis runtime
+            logger.warning("Redis curation cache write failed: %s", exc)
+
+
+_CACHE_BACKEND: Optional[CacheBackend] = None
+_CACHE_BACKEND_CONFIG: Optional[tuple[str, str, str, str, str]] = None
+
+
+def _cache_backend() -> CacheBackend:
+    global _CACHE_BACKEND, _CACHE_BACKEND_CONFIG
+    config = (
+        os.environ.get("FUSION_GENE_CURATION_CACHE", "1"),
+        os.environ.get("FUSION_GENE_CURATION_CACHE_BACKEND", "file"),
+        os.environ.get("FUSION_GENE_CURATION_REDIS_URL")
+        or os.environ.get("REDIS_URL")
+        or "",
+        os.environ.get(
+            "FUSION_GENE_CURATION_CACHE_PREFIX",
+            "fusion-annotation:gene-curation",
+        ),
+        os.environ.get("FUSION_GENE_CURATION_CACHE_DIR", ""),
+    )
+    if _CACHE_BACKEND is not None and _CACHE_BACKEND_CONFIG == config:
+        return _CACHE_BACKEND
+
+    if not _cache_enabled():
+        _CACHE_BACKEND = NullCacheBackend()
+        _CACHE_BACKEND_CONFIG = config
+        return _CACHE_BACKEND
+    backend = (
+        os.environ.get("FUSION_GENE_CURATION_CACHE_BACKEND", "file")
+        .strip()
+        .lower()
+    )
+    if backend in {"0", "false", "no", "none", "disabled"}:
+        _CACHE_BACKEND = NullCacheBackend()
+        _CACHE_BACKEND_CONFIG = config
+        return _CACHE_BACKEND
+    if backend == "redis":
+        redis_url = os.environ.get("FUSION_GENE_CURATION_REDIS_URL") or os.environ.get(
+            "REDIS_URL"
+        )
+        if not redis_url:
+            logger.warning(
+                "FUSION_GENE_CURATION_CACHE_BACKEND=redis set without REDIS_URL; falling back to file cache."
+            )
+            _CACHE_BACKEND = FileCacheBackend(_cache_dir())
+            _CACHE_BACKEND_CONFIG = config
+            return _CACHE_BACKEND
+        prefix = os.environ.get(
+            "FUSION_GENE_CURATION_CACHE_PREFIX",
+            "fusion-annotation:gene-curation",
+        )
+        try:
+            _CACHE_BACKEND = RedisCacheBackend(redis_url, prefix)
+        except RuntimeError as exc:
+            logger.warning("%s Falling back to file cache.", exc)
+            _CACHE_BACKEND = FileCacheBackend(_cache_dir())
+        _CACHE_BACKEND_CONFIG = config
+        return _CACHE_BACKEND
+    if backend != "file":
+        logger.warning(
+            "Unknown curation cache backend %r; falling back to file cache.",
+            backend,
+        )
+    _CACHE_BACKEND = FileCacheBackend(_cache_dir())
+    _CACHE_BACKEND_CONFIG = config
+    return _CACHE_BACKEND
+
+
+def _read_cache(
+    namespace: str,
+    key_payload: dict[str, Any],
+    ttl_seconds: int = 0,
+) -> Optional[Any]:
+    return _cache_backend().read(namespace, key_payload, ttl_seconds)
+
+
+def _write_cache(
+    namespace: str,
+    key_payload: dict[str, Any],
+    value: Any,
+    ttl_seconds: int = 0,
+) -> None:
+    _cache_backend().write(namespace, key_payload, value, ttl_seconds)
+
+
+def _cache_path(namespace: str, key_payload: dict[str, Any]) -> Path:
+    return FileCacheBackend(_cache_dir())._path(namespace, key_payload)
+
+
+def _record_to_cache(record: PubMedRecord) -> dict[str, str]:
+    return {"pmid": record.pmid, "title": record.title, "abstract": record.abstract}
+
+
+def _record_from_cache(value: dict[str, str]) -> PubMedRecord:
+    return PubMedRecord(
+        pmid=str(value.get("pmid", "")),
+        title=str(value.get("title", "")),
+        abstract=str(value.get("abstract", "")),
+    )
 
 
 def _fusion_value(fusion: object, attr: str) -> Any:
@@ -370,8 +648,37 @@ def fusion_contexts_by_fusion(
     return contexts
 
 
-def _context_dicts(contexts: list[FusionCurationContext]) -> list[dict]:
-    return [asdict(context) for context in contexts]
+def _context_dicts(
+    contexts: list[FusionCurationContext],
+    *,
+    include_domain_context: bool = True,
+) -> list[dict]:
+    items = []
+    for context in contexts:
+        item = asdict(context)
+        if not include_domain_context:
+            item["retained_domains"] = ()
+            item["lost_domains"] = ()
+            item["disrupted_domains"] = ()
+            item["kinase_gene"] = None
+            item["kinase_gene_side"] = None
+            item["kinase_domain_status"] = None
+        items.append(item)
+    return items
+
+
+def _payload_literature_supports_domain_context(payload: dict) -> bool:
+    """Return true only when synthesis explicitly grounds structural context in literature."""
+    if payload.get("literature_structural_support") is True:
+        return True
+    if payload.get("literature_domain_support") is True:
+        return True
+    structural_pmids = payload.get("structural_supporting_pmids") or payload.get(
+        "domain_supporting_pmids"
+    )
+    return isinstance(structural_pmids, list) and any(
+        str(pmid).strip() for pmid in structural_pmids
+    )
 
 
 def _strip_markdown_json_fence(text: str) -> str:
@@ -381,7 +688,229 @@ def _strip_markdown_json_fence(text: str) -> str:
     lines = cleaned.splitlines()
     if len(lines) >= 2 and lines[-1].strip().startswith("```"):
         return "\n".join(lines[1:-1]).strip()
+    if len(lines) >= 2 and lines[0].strip().startswith("```"):
+        return "\n".join(lines[1:]).strip()
     return cleaned
+
+
+def _extract_json_object(text: str) -> dict:
+    cleaned = _strip_markdown_json_fence(text)
+    try:
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        return parsed
+
+    start = cleaned.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("no JSON object found", cleaned, 0)
+
+    in_string = False
+    escaped = False
+    depth = 0
+    for index, char in enumerate(cleaned[start:], start=start):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                candidate = cleaned[start:index + 1]
+                parsed = json.loads(candidate)
+                if isinstance(parsed, dict):
+                    return parsed
+                break
+    raise json.JSONDecodeError("no complete JSON object found", cleaned, start)
+
+
+def _looks_like_json_blob(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if text.startswith("{") or text.startswith("```"):
+        return True
+    return (
+        '"rationale"' in text
+        and (
+            '"supporting_pmids"' in text
+            or '"retrieved_pmids"' in text
+            or '"fusion_literature_identified"' in text
+        )
+    )
+
+
+def _jsonish_string_field(text: str, key: str) -> Optional[str]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    quote = text.find('"', colon + 1)
+    if quote == -1:
+        return None
+
+    escaped = False
+    for index in range(quote + 1, len(text)):
+        char = text[index]
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            try:
+                value = json.loads(text[quote:index + 1])
+            except json.JSONDecodeError:
+                return None
+            return value if isinstance(value, str) else None
+    return None
+
+
+def _jsonish_array_field(text: str, key: str) -> Optional[list]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    bracket = text.find("[", colon + 1)
+    if bracket == -1:
+        return None
+
+    in_string = False
+    escaped = False
+    depth = 0
+    for index, char in enumerate(text[bracket:], start=bracket):
+        if escaped:
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    value = json.loads(text[bracket:index + 1])
+                except json.JSONDecodeError:
+                    return None
+                return value if isinstance(value, list) else None
+    return None
+
+
+def _jsonish_bool_or_null_field(text: str, key: str) -> Optional[bool]:
+    marker = f'"{key}"'
+    start = text.find(marker)
+    if start == -1:
+        return None
+    colon = text.find(":", start + len(marker))
+    if colon == -1:
+        return None
+    value = text[colon + 1:].lstrip()
+    if value.startswith("true"):
+        return True
+    if value.startswith("false"):
+        return False
+    return None
+
+
+def _repair_payload_from_jsonish_text(payload: dict, text: str) -> dict:
+    repaired = dict(payload)
+    cleaned = _strip_markdown_json_fence(text)
+    for key in ("gene", "fusion", "rationale"):
+        value = _jsonish_string_field(cleaned, key)
+        if value:
+            repaired[key] = value
+    for key in ("supporting_pmids", "retrieved_pmids", "structural_supporting_pmids"):
+        value = _jsonish_array_field(cleaned, key)
+        if value is not None:
+            repaired[key] = value
+    for key in (
+        "fusion_literature_identified",
+        "cancer_associated",
+        "insufficient_evidence",
+        "literature_structural_support",
+        "literature_domain_support",
+    ):
+        value = _jsonish_bool_or_null_field(cleaned, key)
+        if value is not None:
+            repaired[key] = value
+    return repaired
+
+
+def _normal_model_parse_fallback(
+    *,
+    subject_label: str,
+    subject: str,
+    records: list[PubMedRecord],
+    fusion_contexts: list[FusionCurationContext],
+    fusion_result: bool,
+    raw_text: str = "",
+) -> dict:
+    payload = {
+        subject_label: subject,
+        "cancer_associated": None,
+        "rationale": (
+            "The curation model returned a malformed structured response, so this "
+            "result should be regenerated before review."
+        ),
+        "supporting_pmids": [],
+        "retrieved_pmids": [record.pmid for record in records],
+        "fusion_contexts": _context_dicts(fusion_contexts),
+        "literature_structural_support": False,
+        "structural_supporting_pmids": [],
+        "insufficient_evidence": True,
+    }
+    if fusion_result:
+        payload["fusion_literature_identified"] = None
+    if raw_text:
+        payload = _repair_payload_from_jsonish_text(payload, raw_text)
+    return payload
+
+
+def _repair_json_rationale(payload: dict) -> dict:
+    rationale = payload.get("rationale")
+    if not _looks_like_json_blob(rationale):
+        return payload
+    try:
+        parsed = _extract_json_object(str(rationale))
+    except json.JSONDecodeError:
+        repaired = _repair_payload_from_jsonish_text(payload, str(rationale))
+        if repaired.get("rationale") != rationale and repaired.get("rationale"):
+            return repaired
+        payload["rationale"] = ""
+        payload["insufficient_evidence"] = True
+        return payload
+    repaired = {**payload, **parsed}
+    if _looks_like_json_blob(repaired.get("rationale")):
+        repaired["rationale"] = (
+            "The curation model returned malformed JSON in the rationale field; "
+            "rerun curation to regenerate this result."
+        )
+        repaired["insufficient_evidence"] = True
+    return repaired
 
 
 def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
@@ -393,15 +922,54 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
         queries.extend([
             f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma)',
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
+            f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
+            queries.append(f'"{fusion_hyphen}" AND "exon {exon}"')
+        other_exon = context.three_exon if context.side == "five_prime" else context.five_exon
+        if exon and other_exon:
+            queries.append(
+                f'"{gene}" AND "{context.partner_gene}" '
+                f'AND "exon {exon}" AND "exon {other_exon}"'
+            )
+        transcript = context.five_transcript if context.side == "five_prime" else context.three_transcript
+        if transcript:
+            queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        genomic = context.five_genomic if context.side == "five_prime" else context.three_genomic
+        if genomic:
+            queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        protein_breakpoint = (
+            context.five_protein_breakpoint
+            if context.side == "five_prime"
+            else context.three_protein_breakpoint
+        )
+        if protein_breakpoint:
+            queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
         if context.kinase_gene and context.kinase_gene.upper() == gene.upper():
             queries.append(f'"{gene}" AND "kinase domain" AND fusion')
         if context.kinase_gene and context.kinase_domain_status == "retained":
             queries.append(f'"{context.kinase_gene}" AND "kinase domain retained"')
     return list(dict.fromkeys(queries))
+
+
+def _with_tumor_type_queries(
+    queries: list[str],
+    tumor_type: Optional[str],
+    *,
+    subjects: Iterable[str] = (),
+) -> list[str]:
+    tumor = " ".join(str(tumor_type or "").split())
+    if not tumor:
+        return queries
+    expanded = list(queries)
+    for subject in subjects:
+        subject = str(subject or "").strip()
+        if subject:
+            expanded.append(f'"{subject}" AND "{tumor}"')
+    expanded.extend([f"({query}) AND \"{tumor}\"" for query in queries[:4]])
+    return list(dict.fromkeys(expanded))
 
 
 def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
@@ -423,7 +991,28 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
         queries.extend([
             f'"{five_gene}" AND "{three_gene}" AND fusion',
             f'"{five_gene}" AND "{three_gene}" AND (oncogenic OR kinase OR inhibitor OR response)',
+            f'"{five_gene}" AND "{three_gene}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
+    for context in fusion_contexts:
+        exons = [value for value in (context.five_exon, context.three_exon) if value]
+        if len(exons) == 2 and five_gene and three_gene:
+            queries.append(
+                f'"{five_gene}" AND "{three_gene}" '
+                f'AND "exon {exons[0]}" AND "exon {exons[1]}"'
+            )
+            queries.append(
+                f'"{fusion_hyphen}" AND "exon {exons[0]}" '
+                f'AND "exon {exons[1]}"'
+            )
+        for transcript in (context.five_transcript, context.three_transcript):
+            if transcript:
+                queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        for genomic in (context.five_genomic, context.three_genomic):
+            if genomic:
+                queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        for protein_breakpoint in (context.five_protein_breakpoint, context.three_protein_breakpoint):
+            if protein_breakpoint:
+                queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
     kinase_genes = {
         context.kinase_gene
         for context in fusion_contexts
@@ -443,6 +1032,21 @@ def retrieve_pubmed_records_for_queries(
     max_results: int = 8,
 ) -> list[PubMedRecord]:
     ncbi_client = ncbi_client or NcbiClient(api_key=ncbi_api_key)
+    cache_key = {
+        "version": "pubmed-records-v2",
+        "subject": subject.upper(),
+        "max_results": max_results,
+        "queries": queries,
+    }
+    ttl_seconds = max(0, int(os.environ.get("FUSION_GENE_CURATION_PUBMED_CACHE_TTL_SECONDS", "86400")))
+    cached = _read_cache("pubmed-records", cache_key, ttl_seconds=ttl_seconds)
+    if isinstance(cached, list):
+        return [
+            _record_from_cache(item)
+            for item in cached
+            if isinstance(item, dict) and item.get("pmid")
+        ]
+
     pmids = []
     seen_pmids = set()
     for query in queries:
@@ -459,6 +1063,7 @@ def retrieve_pubmed_records_for_queries(
                 seen_pmids.add(pmid)
                 pmids.append(pmid)
     if not pmids:
+        _write_cache("pubmed-records", cache_key, [], ttl_seconds=ttl_seconds)
         return []
 
     fetch_params = {
@@ -483,6 +1088,12 @@ def retrieve_pubmed_records_for_queries(
         ).strip()
         if pmid and abstract:
             records.append(PubMedRecord(pmid=pmid, title=title, abstract=abstract))
+    _write_cache(
+        "pubmed-records",
+        cache_key,
+        [_record_to_cache(record) for record in records],
+        ttl_seconds=ttl_seconds,
+    )
     return records
 
 
@@ -493,11 +1104,15 @@ def retrieve_pubmed_records(
     ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
+    tumor_type: Optional[str] = None,
 ) -> list[PubMedRecord]:
     fusion_contexts = fusion_contexts or []
+    subjects = [gene]
+    subjects.extend(context.partner_gene for context in fusion_contexts)
+    subjects.extend(context.fusion.replace("::", "-") for context in fusion_contexts)
     return retrieve_pubmed_records_for_queries(
         gene,
-        _pubmed_queries(gene, fusion_contexts),
+        _with_tumor_type_queries(_pubmed_queries(gene, fusion_contexts), tumor_type, subjects=subjects),
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
@@ -517,6 +1132,24 @@ def fetch_oncokb_curated_gene_index(api_token: str = "") -> dict[str, dict]:
     version = os.environ.get("ONCOKB_DATA_VERSION")
     if version:
         params["version"] = version
+
+    cache_key = {
+        "version": "oncokb-curated-genes-v1",
+        "base_url": base_url,
+        "data_version": version or "",
+        "includeEvidence": True,
+    }
+    ttl_seconds = max(
+        0,
+        int(os.environ.get("FUSION_GENE_CURATION_ONCOKB_CACHE_TTL_SECONDS", "86400")),
+    )
+    cached = _read_cache("oncokb-curated-genes", cache_key, ttl_seconds=ttl_seconds)
+    if isinstance(cached, dict):
+        return {
+            str(symbol).upper(): item
+            for symbol, item in cached.items()
+            if isinstance(item, dict)
+        }
 
     response = requests.get(
         f"{base_url}/utils/allCuratedGenes",
@@ -543,6 +1176,7 @@ def fetch_oncokb_curated_gene_index(api_token: str = "") -> dict[str, dict]:
         symbol = str(item.get("hugoSymbol") or "").strip().upper()
         if symbol:
             genes[symbol] = item
+    _write_cache("oncokb-curated-genes", cache_key, genes, ttl_seconds=ttl_seconds)
     return genes
 
 
@@ -612,13 +1246,15 @@ def _oncokb_gene_result(
     if levels:
         rationale_parts.append(f"OncoKB reports {', '.join(levels)}.")
 
-    return {
+    result = {
         "gene": gene,
         "cancer_associated": _oncokb_cancer_association(gene_type),
         "rationale": _truncate_at_sentence(" ".join(rationale_parts)),
+        "cancer_association_rationale": _truncate_at_sentence(" ".join(rationale_parts), max_chars=220),
+        "gene_summary": _truncate_at_sentence(" ".join(part for part in [summary, background] if part), max_chars=520),
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts),
         "insufficient_evidence": gene_type == "INSUFFICIENT_EVIDENCE" and not summary and not background,
         "curation_source": "OncoKB",
         "oncokb_gene_type": gene_type,
@@ -627,6 +1263,59 @@ def _oncokb_gene_result(
         "oncokb_highest_sensitive_level": highest_sensitive,
         "oncokb_highest_resistance_level": highest_resistance,
         "oncokb_url": f"https://www.oncokb.org/gene/{gene}",
+    }
+    result["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_literature_supports_domain_context(result),
+    )
+    return result
+
+
+def _curation_cache_key(
+    gene: str,
+    records: list[PubMedRecord],
+    model: str,
+    fusion_contexts: list[FusionCurationContext],
+    tumor_type: Optional[str] = None,
+) -> dict[str, Any]:
+    return {
+        "version": "gene-curation-v1",
+        "gene": gene.upper(),
+        "model": model,
+        "tumor_type": tumor_type or "",
+        "fusion_contexts": _context_dicts(fusion_contexts),
+        "records": [
+            {
+                "pmid": record.pmid,
+                "title_sha256": _text_digest(record.title),
+                "abstract_sha256": _text_digest(record.abstract),
+            }
+            for record in records
+        ],
+    }
+
+
+def _fusion_curation_cache_key(
+    fusion: str,
+    records: list[PubMedRecord],
+    model: str,
+    fusion_contexts: list[FusionCurationContext],
+    tumor_type: Optional[str] = None,
+) -> dict[str, Any]:
+    return {
+        "version": "fusion-curation-v1",
+        "fusion": fusion.upper(),
+        "model": model,
+        "tumor_type": tumor_type or "",
+        "fusion_contexts": _context_dicts(fusion_contexts),
+        "records": [
+            {
+                "pmid": record.pmid,
+                "title_sha256": _text_digest(record.title),
+                "abstract_sha256": _text_digest(record.abstract),
+            }
+            for record in records
+        ],
     }
 
 
@@ -638,9 +1327,12 @@ def _no_pubmed_evidence_result(
         "gene": gene,
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this gene.",
+        "cancer_association_rationale": "No PubMed abstracts were retrieved for this gene.",
+        "gene_summary": "",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts or []),
+        "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
         "insufficient_evidence": True,
     }
 
@@ -654,9 +1346,10 @@ def _no_fusion_pubmed_evidence_result(
         "fusion_literature_identified": False,
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this exact fusion.",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
-        "fusion_contexts": _context_dicts(fusion_contexts or []),
+        "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
         "insufficient_evidence": True,
     }
 
@@ -711,6 +1404,42 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
     return "\n".join(lines)
 
 
+def _quote_in_abstract(quote: str, abstract: str) -> bool:
+    compact_quote = " ".join(str(quote or "").split()).lower()
+    compact_abstract = " ".join(str(abstract or "").split()).lower()
+    return bool(compact_quote) and compact_quote in compact_abstract
+
+
+def _validated_supporting_quotes(payload: dict, records: list[PubMedRecord]) -> list[dict[str, str]]:
+    records_by_pmid = {record.pmid: record for record in records}
+    raw_items = payload.get("supporting_citation_quotes") or payload.get("supporting_quotes") or []
+    if not isinstance(raw_items, list):
+        return []
+    validated = []
+    seen = set()
+    for item in raw_items:
+        if isinstance(item, dict):
+            pmid = str(item.get("pmid") or "").strip()
+            quote = str(item.get("quote") or "").strip()
+        else:
+            continue
+        record = records_by_pmid.get(pmid)
+        quote = " ".join(quote.split())
+        if not record or not quote or len(quote) > 260:
+            continue
+        key = (pmid, quote)
+        if key in seen or not _quote_in_abstract(quote, record.abstract):
+            continue
+        seen.add(key)
+        validated.append({"pmid": pmid, "quote": quote})
+    return validated
+
+
+def _attach_validated_quotes(payload: dict, records: list[PubMedRecord]) -> dict:
+    payload["supporting_citation_quotes"] = _validated_supporting_quotes(payload, records)
+    return payload
+
+
 def curate_gene(
     gene: str,
     *,
@@ -722,6 +1451,7 @@ def curate_gene(
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
     oncokb_genes_by_symbol: Optional[dict[str, dict]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     fusion_contexts = fusion_contexts or []
     oncokb_result = _oncokb_gene_result(
@@ -741,9 +1471,30 @@ def curate_gene(
         ncbi_client=ncbi_client,
         max_results=max_results,
         fusion_contexts=fusion_contexts,
+        tumor_type=tumor_type,
     )
     if not records:
         return _no_pubmed_evidence_result(gene, fusion_contexts)
+
+    cache_key = _curation_cache_key(gene, records, model, fusion_contexts, tumor_type)
+    cache_key["abstract_chars"] = abstract_chars
+    result_ttl_seconds = max(
+        0,
+        int(os.environ.get("FUSION_GENE_CURATION_RESULT_CACHE_TTL_SECONDS", "2592000")),
+    )
+    cached = _read_cache("gene-curation", cache_key, ttl_seconds=result_ttl_seconds)
+    if isinstance(cached, dict):
+        cached = _repair_json_rationale(cached)
+        cached.setdefault("gene", gene)
+        cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached.setdefault("literature_structural_support", False)
+        cached = _attach_validated_quotes(cached, records)
+        cached["fusion_contexts"] = _context_dicts(
+            fusion_contexts,
+            include_domain_context=_payload_literature_supports_domain_context(cached),
+        )
+        cached.setdefault("curation_source", "PubMed + LLM")
+        return cached
 
     context = "\n\n".join(
         f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
@@ -751,6 +1502,7 @@ def curate_gene(
     )
     prompt = f"""\
 Gene: {gene}
+Tumor type supplied by user: {tumor_type or 'not supplied'}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
@@ -765,14 +1517,24 @@ Return one JSON object with:
   Write 1-2 short sentences, ideally 40-75 words total. Prioritize the
   classification-relevant conclusion, strongest mechanism/cancer context, and
   one caveat if needed. Do not enumerate every paper or make a literature-review paragraph.
+- cancer_association_rationale: one concise sentence, ideally 25-40 words, describing the strongest cancer evidence.
+- gene_summary: 2 short evidence sentences, ideally 60-90 words total, optimized for curator scanning.
 - supporting_pmids: up to 4 PMIDs from the context
+- supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
+- literature_structural_support: true only when the PubMed abstracts specifically support the provided exon,
+  transcript, genomic/protein breakpoint, frame/variant, domain-retention, or kinase-domain context.
+  Set false when those details are present only in Genome Nexus context.
+- structural_supporting_pmids: PMIDs from the context that support those structural/domain/breakpoint details.
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the context is too sparse
 
 Do not infer transcript, breakpoint, domain-retention, or kinase-domain status
 beyond the Genome Nexus context. Do not mark a result cancer-associated solely
 because a kinase domain is retained; supporting PubMed evidence is still required.
+Only mark literature_structural_support true when the PubMed abstracts themselves
+describe a similar exon breakpoint, transcript, genomic/protein breakpoint, fusion
+variant/frame/region, retained/lost/disrupted domain, or kinase-domain status.
 When fusion_specificity is gene_pair_only, limit conclusions to gene-pair-level
 literature evidence and explicitly avoid claims about the exact exon, protein
 junction, retained/lost domains, or kinase-domain retention.
@@ -796,21 +1558,29 @@ junction, retained/lost domains, or kinase-domain retention.
         if getattr(block, "type", None) == "text"
     ).strip()
     try:
-        payload = json.loads(_strip_markdown_json_fence(text))
+        payload = _extract_json_object(text)
     except json.JSONDecodeError:
-        payload = {
-            "gene": gene,
-            "cancer_associated": None,
-            "rationale": text,
-            "supporting_pmids": [],
-            "retrieved_pmids": [record.pmid for record in records],
-            "fusion_contexts": _context_dicts(fusion_contexts),
-            "insufficient_evidence": True,
-        }
+        payload = _normal_model_parse_fallback(
+            subject_label="gene",
+            subject=gene,
+            records=records,
+            fusion_contexts=fusion_contexts,
+            fusion_result=False,
+            raw_text=text,
+        )
+    payload = _repair_json_rationale(payload)
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
-    payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload.setdefault("cancer_association_rationale", payload.get("rationale", ""))
+    payload.setdefault("gene_summary", payload.get("rationale", ""))
+    payload.setdefault("literature_structural_support", False)
+    payload = _attach_validated_quotes(payload, records)
+    payload["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_literature_supports_domain_context(payload),
+    )
     payload.setdefault("curation_source", "PubMed + LLM")
+    _write_cache("gene-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload
 
 
@@ -824,6 +1594,7 @@ def curate_fusion(
     max_results: int = 8,
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     if not anthropic_api_key:
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
@@ -831,7 +1602,11 @@ def curate_fusion(
     fusion_contexts = fusion_contexts or []
     records = retrieve_pubmed_records_for_queries(
         fusion,
-        _fusion_pubmed_queries(fusion, fusion_contexts),
+        _with_tumor_type_queries(
+            _fusion_pubmed_queries(fusion, fusion_contexts),
+            tumor_type,
+            subjects=[fusion, fusion.replace("::", "-")],
+        ),
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
@@ -839,12 +1614,32 @@ def curate_fusion(
     if not records:
         return _no_fusion_pubmed_evidence_result(fusion, fusion_contexts)
 
+    cache_key = _fusion_curation_cache_key(fusion, records, model, fusion_contexts, tumor_type)
+    cache_key["abstract_chars"] = abstract_chars
+    result_ttl_seconds = max(
+        0,
+        int(os.environ.get("FUSION_GENE_CURATION_RESULT_CACHE_TTL_SECONDS", "2592000")),
+    )
+    cached = _read_cache("fusion-curation", cache_key, ttl_seconds=result_ttl_seconds)
+    if isinstance(cached, dict):
+        cached = _repair_json_rationale(cached)
+        cached.setdefault("fusion", fusion)
+        cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached.setdefault("literature_structural_support", False)
+        cached = _attach_validated_quotes(cached, records)
+        cached["fusion_contexts"] = _context_dicts(
+            fusion_contexts,
+            include_domain_context=_payload_literature_supports_domain_context(cached),
+        )
+        return cached
+
     context = "\n\n".join(
         f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
         for record in records
     )
     prompt = f"""\
 Fusion: {fusion}
+Tumor type supplied by user: {tumor_type or 'not supplied'}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
@@ -861,13 +1656,21 @@ Return one JSON object with:
   fusion is described in the literature, the strongest cancer/mechanistic context,
   and one caveat if needed.
 - supporting_pmids: up to 4 PMIDs from the context
+- supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
+- literature_structural_support: true only when the PubMed abstracts specifically support the provided exon,
+  transcript, genomic/protein breakpoint, frame/variant, domain-retention, or kinase-domain context.
+  Set false when those details are present only in Genome Nexus context.
+- structural_supporting_pmids: PMIDs from the context that support those structural/domain/breakpoint details.
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the exact fusion literature context is too sparse
 
 Prioritize evidence about the exact fusion over separate evidence about either
 partner gene. Do not infer transcript, breakpoint, domain-retention, or
 kinase-domain status beyond the Genome Nexus context.
+Only mark literature_structural_support true when the PubMed abstracts themselves
+describe a similar exon breakpoint, transcript, genomic/protein breakpoint, fusion
+variant/frame/region, retained/lost/disrupted domain, or kinase-domain status.
 """
 
     import anthropic
@@ -888,21 +1691,26 @@ kinase-domain status beyond the Genome Nexus context.
         if getattr(block, "type", None) == "text"
     ).strip()
     try:
-        payload = json.loads(_strip_markdown_json_fence(text))
+        payload = _extract_json_object(text)
     except json.JSONDecodeError:
-        payload = {
-            "fusion": fusion,
-            "fusion_literature_identified": None,
-            "cancer_associated": None,
-            "rationale": text,
-            "supporting_pmids": [],
-            "retrieved_pmids": [record.pmid for record in records],
-            "fusion_contexts": _context_dicts(fusion_contexts),
-            "insufficient_evidence": True,
-        }
+        payload = _normal_model_parse_fallback(
+            subject_label="fusion",
+            subject=fusion,
+            records=records,
+            fusion_contexts=fusion_contexts,
+            fusion_result=True,
+            raw_text=text,
+        )
+    payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
-    payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload.setdefault("literature_structural_support", False)
+    payload = _attach_validated_quotes(payload, records)
+    payload["fusion_contexts"] = _context_dicts(
+        fusion_contexts,
+        include_domain_context=_payload_literature_supports_domain_context(payload),
+    )
+    _write_cache("fusion-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload
 
 
@@ -919,6 +1727,8 @@ def curate_fusion_genes(
     annotation_results: Optional[Iterable[dict]] = None,
     *,
     force_gene_curation: bool = False,
+    requested_genes: Optional[Iterable[str]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_api_key:
@@ -935,6 +1745,11 @@ def curate_fusion_genes(
     max_workers = max(1, int(os.environ.get("FUSION_GENE_CURATION_WORKERS", "3")))
     fusion_results = []
     results = []
+    requested_gene_set = {
+        str(gene).strip().upper()
+        for gene in (requested_genes or [])
+        if str(gene).strip()
+    }
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         fusion_futures = {
@@ -948,6 +1763,7 @@ def curate_fusion_genes(
                 max_results=max_results,
                 abstract_chars=abstract_chars,
                 fusion_contexts=contexts,
+                tumor_type=tumor_type,
             ): fusion
             for fusion, contexts in contexts_by_fusion.items()
         }
@@ -962,7 +1778,10 @@ def curate_fusion_genes(
                     "insufficient_evidence": True,
                     "supporting_pmids": [],
                     "retrieved_pmids": [],
-                    "fusion_contexts": _context_dicts(contexts_by_fusion.get(fusion, [])),
+                    "fusion_contexts": _context_dicts(
+                        contexts_by_fusion.get(fusion, []),
+                        include_domain_context=False,
+                    ),
                 })
 
     sufficient_fusions = {
@@ -982,6 +1801,8 @@ def curate_fusion_genes(
                 if context.gene not in seen_genes:
                     seen_genes.add(context.gene)
                     genes.append(context.gene)
+    if requested_gene_set:
+        genes = [gene for gene in genes if gene.upper() in requested_gene_set]
 
     oncokb_lookup_error = None
     oncokb_token = _oncokb_api_token()
@@ -1001,7 +1822,10 @@ def curate_fusion_genes(
                 "insufficient_evidence": True,
                 "supporting_pmids": [],
                 "retrieved_pmids": [],
-                "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                "fusion_contexts": _context_dicts(
+                    contexts_by_gene.get(gene, []),
+                    include_domain_context=False,
+                ),
                 "curation_source": "OncoKB",
             })
         results.sort(key=lambda item: item.get("gene", ""))
@@ -1021,6 +1845,7 @@ def curate_fusion_genes(
                 abstract_chars=abstract_chars,
                 fusion_contexts=contexts_by_gene.get(gene, []),
                 oncokb_genes_by_symbol=oncokb_genes_by_symbol,
+                tumor_type=tumor_type,
             ): gene
             for gene in genes
         }
@@ -1035,7 +1860,10 @@ def curate_fusion_genes(
                     "insufficient_evidence": True,
                     "supporting_pmids": [],
                     "retrieved_pmids": [],
-                    "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                    "fusion_contexts": _context_dicts(
+                        contexts_by_gene.get(gene, []),
+                        include_domain_context=False,
+                    ),
                 })
 
     results.sort(key=lambda item: item.get("gene", ""))
