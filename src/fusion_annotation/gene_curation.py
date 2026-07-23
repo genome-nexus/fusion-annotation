@@ -667,25 +667,18 @@ def _context_dicts(
     return items
 
 
-def _payload_references_domain_context(payload: dict) -> bool:
-    text = " ".join(
-        str(payload.get(key) or "")
-        for key in ("rationale", "oncokb_summary", "oncokb_background")
-    ).lower()
-    if not text:
-        return False
-    domain_terms = (
-        "domain",
-        "kinase",
-        "retained",
-        "retention",
-        "lost ",
-        "loss ",
-        "disrupted",
-        "oligomerization",
-        "dimerization",
+def _payload_literature_supports_domain_context(payload: dict) -> bool:
+    """Return true only when synthesis explicitly grounds structural context in literature."""
+    if payload.get("literature_structural_support") is True:
+        return True
+    if payload.get("literature_domain_support") is True:
+        return True
+    structural_pmids = payload.get("structural_supporting_pmids") or payload.get(
+        "domain_supporting_pmids"
     )
-    return any(term in text for term in domain_terms)
+    return isinstance(structural_pmids, list) and any(
+        str(pmid).strip() for pmid in structural_pmids
+    )
 
 
 def _strip_markdown_json_fence(text: str) -> str:
@@ -850,11 +843,17 @@ def _repair_payload_from_jsonish_text(payload: dict, text: str) -> dict:
         value = _jsonish_string_field(cleaned, key)
         if value:
             repaired[key] = value
-    for key in ("supporting_pmids", "retrieved_pmids"):
+    for key in ("supporting_pmids", "retrieved_pmids", "structural_supporting_pmids"):
         value = _jsonish_array_field(cleaned, key)
         if value is not None:
             repaired[key] = value
-    for key in ("fusion_literature_identified", "cancer_associated", "insufficient_evidence"):
+    for key in (
+        "fusion_literature_identified",
+        "cancer_associated",
+        "insufficient_evidence",
+        "literature_structural_support",
+        "literature_domain_support",
+    ):
         value = _jsonish_bool_or_null_field(cleaned, key)
         if value is not None:
             repaired[key] = value
@@ -880,6 +879,8 @@ def _normal_model_parse_fallback(
         "supporting_pmids": [],
         "retrieved_pmids": [record.pmid for record in records],
         "fusion_contexts": _context_dicts(fusion_contexts),
+        "literature_structural_support": False,
+        "structural_supporting_pmids": [],
         "insufficient_evidence": True,
     }
     if fusion_result:
@@ -921,10 +922,31 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
         queries.extend([
             f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma)',
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
+            f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
+            queries.append(f'"{fusion_hyphen}" AND "exon {exon}"')
+        other_exon = context.three_exon if context.side == "five_prime" else context.five_exon
+        if exon and other_exon:
+            queries.append(
+                f'"{gene}" AND "{context.partner_gene}" '
+                f'AND "exon {exon}" AND "exon {other_exon}"'
+            )
+        transcript = context.five_transcript if context.side == "five_prime" else context.three_transcript
+        if transcript:
+            queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        genomic = context.five_genomic if context.side == "five_prime" else context.three_genomic
+        if genomic:
+            queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        protein_breakpoint = (
+            context.five_protein_breakpoint
+            if context.side == "five_prime"
+            else context.three_protein_breakpoint
+        )
+        if protein_breakpoint:
+            queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
         if context.kinase_gene and context.kinase_gene.upper() == gene.upper():
             queries.append(f'"{gene}" AND "kinase domain" AND fusion')
         if context.kinase_gene and context.kinase_domain_status == "retained":
@@ -969,7 +991,28 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
         queries.extend([
             f'"{five_gene}" AND "{three_gene}" AND fusion',
             f'"{five_gene}" AND "{three_gene}" AND (oncogenic OR kinase OR inhibitor OR response)',
+            f'"{five_gene}" AND "{three_gene}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
+    for context in fusion_contexts:
+        exons = [value for value in (context.five_exon, context.three_exon) if value]
+        if len(exons) == 2 and five_gene and three_gene:
+            queries.append(
+                f'"{five_gene}" AND "{three_gene}" '
+                f'AND "exon {exons[0]}" AND "exon {exons[1]}"'
+            )
+            queries.append(
+                f'"{fusion_hyphen}" AND "exon {exons[0]}" '
+                f'AND "exon {exons[1]}"'
+            )
+        for transcript in (context.five_transcript, context.three_transcript):
+            if transcript:
+                queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        for genomic in (context.five_genomic, context.three_genomic):
+            if genomic:
+                queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        for protein_breakpoint in (context.five_protein_breakpoint, context.three_protein_breakpoint):
+            if protein_breakpoint:
+                queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
     kinase_genes = {
         context.kinase_gene
         for context in fusion_contexts
@@ -1223,7 +1266,7 @@ def _oncokb_gene_result(
     }
     result["fusion_contexts"] = _context_dicts(
         fusion_contexts,
-        include_domain_context=_payload_references_domain_context(result),
+        include_domain_context=_payload_literature_supports_domain_context(result),
     )
     return result
 
@@ -1444,10 +1487,11 @@ def curate_gene(
         cached = _repair_json_rationale(cached)
         cached.setdefault("gene", gene)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached.setdefault("literature_structural_support", False)
         cached = _attach_validated_quotes(cached, records)
         cached["fusion_contexts"] = _context_dicts(
             fusion_contexts,
-            include_domain_context=_payload_references_domain_context(cached),
+            include_domain_context=_payload_literature_supports_domain_context(cached),
         )
         cached.setdefault("curation_source", "PubMed + LLM")
         return cached
@@ -1478,12 +1522,19 @@ Return one JSON object with:
 - supporting_pmids: up to 4 PMIDs from the context
 - supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
+- literature_structural_support: true only when the PubMed abstracts specifically support the provided exon,
+  transcript, genomic/protein breakpoint, frame/variant, domain-retention, or kinase-domain context.
+  Set false when those details are present only in Genome Nexus context.
+- structural_supporting_pmids: PMIDs from the context that support those structural/domain/breakpoint details.
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the context is too sparse
 
 Do not infer transcript, breakpoint, domain-retention, or kinase-domain status
 beyond the Genome Nexus context. Do not mark a result cancer-associated solely
 because a kinase domain is retained; supporting PubMed evidence is still required.
+Only mark literature_structural_support true when the PubMed abstracts themselves
+describe a similar exon breakpoint, transcript, genomic/protein breakpoint, fusion
+variant/frame/region, retained/lost/disrupted domain, or kinase-domain status.
 When fusion_specificity is gene_pair_only, limit conclusions to gene-pair-level
 literature evidence and explicitly avoid claims about the exact exon, protein
 junction, retained/lost domains, or kinase-domain retention.
@@ -1522,10 +1573,11 @@ junction, retained/lost domains, or kinase-domain retention.
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
     payload.setdefault("cancer_association_rationale", payload.get("rationale", ""))
     payload.setdefault("gene_summary", payload.get("rationale", ""))
+    payload.setdefault("literature_structural_support", False)
     payload = _attach_validated_quotes(payload, records)
     payload["fusion_contexts"] = _context_dicts(
         fusion_contexts,
-        include_domain_context=_payload_references_domain_context(payload),
+        include_domain_context=_payload_literature_supports_domain_context(payload),
     )
     payload.setdefault("curation_source", "PubMed + LLM")
     _write_cache("gene-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
@@ -1573,10 +1625,11 @@ def curate_fusion(
         cached = _repair_json_rationale(cached)
         cached.setdefault("fusion", fusion)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached.setdefault("literature_structural_support", False)
         cached = _attach_validated_quotes(cached, records)
         cached["fusion_contexts"] = _context_dicts(
             fusion_contexts,
-            include_domain_context=_payload_references_domain_context(cached),
+            include_domain_context=_payload_literature_supports_domain_context(cached),
         )
         return cached
 
@@ -1605,12 +1658,19 @@ Return one JSON object with:
 - supporting_pmids: up to 4 PMIDs from the context
 - supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
+- literature_structural_support: true only when the PubMed abstracts specifically support the provided exon,
+  transcript, genomic/protein breakpoint, frame/variant, domain-retention, or kinase-domain context.
+  Set false when those details are present only in Genome Nexus context.
+- structural_supporting_pmids: PMIDs from the context that support those structural/domain/breakpoint details.
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the exact fusion literature context is too sparse
 
 Prioritize evidence about the exact fusion over separate evidence about either
 partner gene. Do not infer transcript, breakpoint, domain-retention, or
 kinase-domain status beyond the Genome Nexus context.
+Only mark literature_structural_support true when the PubMed abstracts themselves
+describe a similar exon breakpoint, transcript, genomic/protein breakpoint, fusion
+variant/frame/region, retained/lost/disrupted domain, or kinase-domain status.
 """
 
     import anthropic
@@ -1644,10 +1704,11 @@ kinase-domain status beyond the Genome Nexus context.
     payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload.setdefault("literature_structural_support", False)
     payload = _attach_validated_quotes(payload, records)
     payload["fusion_contexts"] = _context_dicts(
         fusion_contexts,
-        include_domain_context=_payload_references_domain_context(payload),
+        include_domain_context=_payload_literature_supports_domain_context(payload),
     )
     _write_cache("fusion-curation", cache_key, payload, ttl_seconds=result_ttl_seconds)
     return payload

@@ -423,7 +423,14 @@ identified in PubMed, driver/actionability rationale, supporting PMIDs,
 short abstract quotes for those PMIDs when available, retrieved PMIDs, and any
 Genome Nexus fusion-position context used by the run. An optional tumor type
 can be supplied from the UI/API to bias PubMed retrieval and curation summaries
-toward the disease context under review.
+toward the disease context under review. When Genome Nexus has exon,
+transcript, genomic, protein-breakpoint, frame, or domain context, curation uses
+that context to add more specific PubMed queries. The returned fusion-position
+and kinase/domain details are only shown as part of the curation result when
+the literature synthesis explicitly marks structural support from PubMed
+abstracts or cites structural supporting PMIDs; otherwise Genome Nexus
+structural facts remain input context and are not re-presented as
+literature-grounded claims.
 When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
 skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
 per-gene override when deeper review is needed. When exact-fusion literature is

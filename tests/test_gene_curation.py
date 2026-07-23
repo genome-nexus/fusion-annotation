@@ -713,6 +713,8 @@ def test_cached_json_blob_rationale_is_repaired(tmp_path, monkeypatch):
                             '"cancer_associated":true,'
                             '"rationale":"{\\"fusion\\":\\"EML4::ALK\\",'
                             '\\"rationale\\":\\"Recovered rationale.\\",'
+                            '\\"literature_structural_support\\":true,'
+                            '\\"structural_supporting_pmids\\":[\\"123\\"],'
                             '\\"supporting_pmids\\":[\\"123\\"]}",'
                             '"supporting_pmids":[],"retrieved_pmids":["123"],'
                             '"insufficient_evidence":false}'
@@ -735,6 +737,8 @@ def test_cached_json_blob_rationale_is_repaired(tmp_path, monkeypatch):
 
     assert result["rationale"] == "Recovered rationale."
     assert result["supporting_pmids"] == ["123"]
+    assert result["literature_structural_support"] is True
+    assert result["structural_supporting_pmids"] == ["123"]
 
 
 def test_cached_incomplete_json_blob_rationale_salvages_nested_fields(tmp_path, monkeypatch):
@@ -764,6 +768,8 @@ def test_cached_incomplete_json_blob_rationale_salvages_nested_fields(tmp_path, 
                             '\\"fusion_literature_identified\\":true,'
                             '\\"cancer_associated\\":true,'
                             '\\"rationale\\":\\"Recovered rationale.\\",'
+                            '\\"literature_structural_support\\":true,'
+                            '\\"structural_supporting_pmids\\":[\\"123\\"],'
                             '\\"supporting_pmids\\":[\\"123\\"]",'
                             '"supporting_pmids":[],"retrieved_pmids":["123"],'
                             '"insufficient_evidence":true}'
@@ -788,6 +794,8 @@ def test_cached_incomplete_json_blob_rationale_salvages_nested_fields(tmp_path, 
     assert result["cancer_associated"] is True
     assert result["rationale"] == "Recovered rationale."
     assert result["supporting_pmids"] == ["123"]
+    assert result["literature_structural_support"] is True
+    assert result["structural_supporting_pmids"] == ["123"]
 
 
 def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
@@ -928,7 +936,7 @@ def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):
     assert result["fusion_contexts"][0]["kinase_domain_status"] is None
 
 
-def test_curate_gene_returns_domain_context_only_when_literature_references_it(monkeypatch):
+def test_curate_gene_returns_domain_context_only_when_literature_structurally_supports_it(monkeypatch):
     monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(
         gene_curation,
@@ -951,6 +959,8 @@ def test_curate_gene_returns_domain_context_only_when_literature_references_it(m
                         text=(
                             '{"gene":"ALK","cancer_associated":true,'
                             '"rationale":"The literature describes retained ALK kinase domain signaling.",'
+                            '"literature_structural_support":true,'
+                            '"structural_supporting_pmids":["123"],'
                             '"supporting_pmids":["123"],'
                             '"retrieved_pmids":["123"],'
                             '"insufficient_evidence":false}'
@@ -990,6 +1000,71 @@ def test_curate_gene_returns_domain_context_only_when_literature_references_it(m
     assert returned_context["retained_domains"] == ("Protein kinase domain (1116-1383)",)
     assert returned_context["kinase_gene"] == "ALK"
     assert returned_context["kinase_domain_status"] == "retained"
+
+
+def test_curate_gene_omits_domain_context_when_only_rationale_mentions_domain(monkeypatch):
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
+    monkeypatch.setattr(
+        gene_curation,
+        "retrieve_pubmed_records",
+        lambda *args, **kwargs: [
+            PubMedRecord(
+                pmid="123",
+                title="ALK fusion evidence",
+                abstract="ALK fusions are oncogenic in lung cancer.",
+            )
+        ],
+    )
+
+    class FakeMessages:
+        def create(self, **kwargs):
+            return SimpleNamespace(
+                content=[
+                    SimpleNamespace(
+                        type="text",
+                        text=(
+                            '{"gene":"ALK","cancer_associated":true,'
+                            '"rationale":"The literature describes ALK kinase signaling.",'
+                            '"literature_structural_support":false,'
+                            '"supporting_pmids":["123"],'
+                            '"retrieved_pmids":["123"],'
+                            '"insufficient_evidence":false}'
+                        ),
+                    )
+                ]
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "anthropic",
+        SimpleNamespace(Anthropic=FakeAnthropic),
+    )
+
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        fusion_contexts=[context],
+    )
+
+    returned_context = result["fusion_contexts"][0]
+    assert returned_context["retained_domains"] == ()
+    assert returned_context["kinase_gene"] is None
+    assert returned_context["kinase_domain_status"] is None
 
 
 def test_fusion_context_marks_gene_pair_only_when_annotation_unavailable():
@@ -1110,6 +1185,48 @@ def test_curate_gene_prompt_warns_against_position_claims_for_gene_pair_only(mon
     assert "Specificity: gene_pair_only" in seen["prompt"]
     assert "avoid claims about the exact exon" in seen["prompt"]
     assert result["fusion_contexts"][0]["breakpoint_context_available"] is False
+
+
+def test_pubmed_queries_include_breakpoint_and_transcript_context():
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        five_transcript="ENST00000318522",
+        three_transcript="ENST00000389048",
+        five_exon="13",
+        three_exon="20",
+        five_genomic="chr2:42491871",
+        three_genomic="chr2:29446394",
+        five_protein_breakpoint="p.496",
+        three_protein_breakpoint="p.1059",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    gene_queries = gene_curation._pubmed_queries("ALK", [context])
+    fusion_queries = gene_curation._fusion_pubmed_queries("EML4::ALK", [context])
+
+    assert (
+        '"EML4-ALK" AND (breakpoint OR variant OR exon OR transcript OR frame)'
+        in gene_queries
+    )
+    assert (
+        '"ALK" AND "EML4" AND "exon 20" AND "exon 13"'
+        in gene_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000389048"' in gene_queries
+    assert '"EML4-ALK" AND "chr2:29446394"' in gene_queries
+    assert '"EML4-ALK" AND "p.1059"' in gene_queries
+    assert (
+        '"EML4" AND "ALK" AND "exon 13" AND "exon 20"'
+        in fusion_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000318522"' in fusion_queries
+    assert '"EML4-ALK" AND "p.496"' in fusion_queries
 
 
 def test_curate_fusion_genes_passes_token_controls(monkeypatch):
