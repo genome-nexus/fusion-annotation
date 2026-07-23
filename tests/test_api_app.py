@@ -227,11 +227,13 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
         annotation_results=None,
         force_gene_curation=False,
         requested_genes=None,
+        tumor_type=None,
     ):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
         seen["force_gene_curation"] = force_gene_curation
         seen["requested_genes"] = requested_genes
+        seen["tumor_type"] = tumor_type
         return {
             "fusions": [],
             "genes": [
@@ -259,6 +261,7 @@ def test_gene_curation_uses_server_side_service(client, monkeypatch):
     assert seen["annotation_results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
     assert seen["force_gene_curation"] is False
     assert seen["requested_genes"] == []
+    assert seen["tumor_type"] is None
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
@@ -270,11 +273,13 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
         annotation_results=None,
         force_gene_curation=False,
         requested_genes=None,
+        tumor_type=None,
     ):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
         seen["force_gene_curation"] = force_gene_curation
         seen["requested_genes"] = requested_genes
+        seen["tumor_type"] = tumor_type
         return {
             "fusions": [],
             "genes": [
@@ -304,6 +309,7 @@ def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
     assert seen["fusions"][0].three_exon is None
     assert seen["force_gene_curation"] is False
     assert seen["requested_genes"] == []
+    assert seen["tumor_type"] is None
     assert seen["annotation_results"][0]["result"]["interface"]["frame_status"] == "unknown"
     assert seen["annotation_results"][0].get("error") is None
     assert r.json()["genes"][0]["gene"] == "ROS1"
@@ -317,11 +323,13 @@ def test_gene_curation_accepts_requested_genes(client, monkeypatch):
         annotation_results=None,
         force_gene_curation=False,
         requested_genes=None,
+        tumor_type=None,
     ):
         seen["fusions"] = fusions
         seen["annotation_results"] = annotation_results
         seen["force_gene_curation"] = force_gene_curation
         seen["requested_genes"] = requested_genes
+        seen["tumor_type"] = tumor_type
         return {
             "fusions": [],
             "genes": [
@@ -345,11 +353,13 @@ def test_gene_curation_accepts_requested_genes(client, monkeypatch):
         ],
         "force_gene_curation": True,
         "genes": ["ALK"],
+        "tumor_type": "lung adenocarcinoma",
     })
 
     assert r.status_code == 200
     assert seen["force_gene_curation"] is True
     assert seen["requested_genes"] == ["ALK"]
+    assert seen["tumor_type"] == "lung adenocarcinoma"
     assert r.json()["genes"][0]["gene"] == "ALK"
 
 
@@ -372,6 +382,9 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "Export curation CSV" in result_view_tsx
     assert "Fusion in literature" in result_view_tsx
     assert "OncoKB gene type" in result_view_tsx
+    assert "Gene summary" in result_view_tsx
+    assert "Supporting abstract quotes" in result_view_tsx
+    assert "tumor_type" in app_tsx
     assert "Literature-referenced domains" in result_view_tsx
     assert "Rationale Supporting PMIDs" in result_view_tsx
     assert "Get fusion info" in result_view_tsx

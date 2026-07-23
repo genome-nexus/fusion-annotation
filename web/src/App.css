@@ -592,6 +592,19 @@ header .tagline {
   word-break: break-word;
 }
 
+.quote-row {
+  align-items: start;
+}
+
+.quote-row ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.quote-row li + li {
+  margin-top: 4px;
+}
+
 .permalink-row {
   display: flex;
   gap: 8px;

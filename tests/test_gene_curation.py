@@ -171,6 +171,35 @@ def test_retrieve_pubmed_records_preserves_mixed_content_xml(tmp_path, monkeypat
     ]
 
 
+def test_retrieve_pubmed_records_adds_tumor_type_queries(tmp_path, monkeypatch):
+    seen_terms = []
+
+    class SearchResponse:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"esearchresult": {"idlist": []}}
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        assert url == gene_curation.ESEARCH_URL
+        seen_terms.append(kwargs["params"]["term"])
+        return SearchResponse()
+
+    monkeypatch.setenv("FUSION_GENE_CURATION_NCBI_MIN_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+
+    records = gene_curation.retrieve_pubmed_records("ALK", tumor_type="lung adenocarcinoma")
+
+    assert records == []
+    assert any('"ALK" AND "lung adenocarcinoma"' in term for term in seen_terms)
+    assert any('"lung adenocarcinoma"' in term and "cancer" in term for term in seen_terms)
+
+
 def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
     calls = []
 
@@ -287,6 +316,9 @@ def test_curate_gene_skips_model_when_pubmed_is_empty(monkeypatch):
         "gene": "NOEVIDENCE",
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this gene.",
+        "cancer_association_rationale": "No PubMed abstracts were retrieved for this gene.",
+        "gene_summary": "",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "fusion_contexts": [],
@@ -784,6 +816,9 @@ def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
                         text=(
                             '{"gene":"ALK","cancer_associated":true,'
                             '"rationale":"ALK has concise functional cancer evidence.",'
+                            '"gene_summary":"ALK fusion evidence supports cancer relevance.",'
+                            '"supporting_citation_quotes":[{"pmid":"123",'
+                            '"quote":"ALK fusions are oncogenic in lung cancer."}],'
                             '"supporting_pmids":["123"],'
                             '"retrieved_pmids":["123"],'
                             '"insufficient_evidence":false}'
@@ -802,12 +837,22 @@ def test_curate_gene_prompt_requests_concise_curator_rationale(monkeypatch):
         SimpleNamespace(Anthropic=FakeAnthropic),
     )
 
-    gene_curation.curate_gene("ALK", anthropic_api_key="configured")
+    result = gene_curation.curate_gene(
+        "ALK",
+        anthropic_api_key="configured",
+        tumor_type="lung cancer",
+    )
 
     assert "1-2 short sentences" in seen["prompt"]
     assert "40-75 words" in seen["prompt"]
     assert "Do not enumerate every paper" in seen["prompt"]
+    assert "Tumor type supplied by user: lung cancer" in seen["prompt"]
+    assert "supporting_citation_quotes" in seen["prompt"]
     assert "fast curator review" in seen["system"]
+    assert result["gene_summary"] == "ALK fusion evidence supports cancer relevance."
+    assert result["supporting_citation_quotes"] == [
+        {"pmid": "123", "quote": "ALK fusions are oncogenic in lung cancer."}
+    ]
 
 
 def test_curate_gene_prompt_includes_genome_nexus_fusion_context(monkeypatch):

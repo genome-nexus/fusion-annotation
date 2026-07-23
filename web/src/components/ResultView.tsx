@@ -198,6 +198,25 @@ function pubmedUrl(pmid: string) {
   return `https://pubmed.ncbi.nlm.nih.gov/${encodeURIComponent(pmid)}/`;
 }
 
+function renderSupportingQuotes(quotes?: { pmid: string; quote: string }[]) {
+  if (!quotes?.length) return null;
+  return (
+    <div className="pmid-row quote-row">
+      <strong>Supporting abstract quotes</strong>
+      <ul>
+        {quotes.map((item) => (
+          <li key={`${item.pmid}-${item.quote}`}>
+            <a href={pubmedUrl(item.pmid)} target="_blank" rel="noopener noreferrer">
+              PMID {item.pmid}
+            </a>
+            : "{item.quote}"
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function renderFusionContext(context: GeneFusionCurationContext) {
   const breakpoint = context.side === "five_prime"
     ? {
@@ -405,6 +424,7 @@ function GeneInformationSection({
                       : "None selected"}
                   </span>
                 </div>
+                {renderSupportingQuotes(fusionItem.supporting_citation_quotes)}
                 <div className="pmid-row">
                   <strong>Retrieved PMIDs</strong>
                   <span>{fusionItem.retrieved_pmids?.join(", ") || "None retrieved"}</span>
@@ -516,6 +536,8 @@ function GeneInformationSection({
                       <dd>{item.cancer_associated == null ? "Unknown" : item.cancer_associated ? "Yes" : "No"}</dd>
                       <dt>Rationale</dt>
                       <dd>{item.rationale || "No rationale returned."}</dd>
+                      <dt>Gene summary</dt>
+                      <dd>{item.gene_summary || item.oncokb_summary || item.oncokb_background || "No summary returned."}</dd>
                       <dt>Fusion knowledge</dt>
                       <dd>{result.knowledge.oncogenic ?? "No fusion-level knowledge-base signal returned."}</dd>
                     </dl>
@@ -539,6 +561,7 @@ function GeneInformationSection({
                           : "None selected"}
                       </span>
                     </div>
+                    {renderSupportingQuotes(item.supporting_citation_quotes)}
                     <div className="pmid-row">
                       <strong>Retrieved PMIDs</strong>
                       <span>{item.retrieved_pmids?.join(", ") || "None retrieved"}</span>

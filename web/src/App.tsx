@@ -68,6 +68,8 @@ const CURATION_CSV_HEADERS = [
   "limitations",
   "cancer_associated",
   "rationale",
+  "gene_summary",
+  "supporting_citation_quotes",
   "supporting_pmids",
   "retrieved_pmids",
   "insufficient_evidence",
@@ -124,6 +126,8 @@ function curationCsvRows(
         context?.limitations,
         item.cancer_associated == null ? "" : item.cancer_associated ? "TRUE" : "FALSE",
         item.rationale,
+        "",
+        item.supporting_citation_quotes?.map((quote) => `PMID ${quote.pmid}: ${quote.quote}`),
         item.supporting_pmids,
         item.retrieved_pmids,
         item.insufficient_evidence ? "TRUE" : "FALSE",
@@ -168,6 +172,8 @@ function curationCsvRows(
         context?.limitations,
         item.cancer_associated == null ? "" : item.cancer_associated ? "TRUE" : "FALSE",
         item.rationale,
+        item.gene_summary,
+        item.supporting_citation_quotes?.map((quote) => `PMID ${quote.pmid}: ${quote.quote}`),
         item.supporting_pmids,
         item.retrieved_pmids,
         item.insufficient_evidence ? "TRUE" : "FALSE",
@@ -370,7 +376,14 @@ function App() {
     }
 
     try {
-      const response = await curateFusionGenes(fusions, forceGeneCuration, genes, controller.signal);
+      const tumorType = fusions.find((item) => item.tumor_type?.trim())?.tumor_type?.trim();
+      const response = await curateFusionGenes(
+        fusions,
+        forceGeneCuration,
+        genes,
+        tumorType,
+        controller.signal,
+      );
       if (curationRequestSequence.current !== requestId) return;
       if (shouldMerge) {
         setFusionCurationResults((current) => mergeFusionCurationResults(current, response.fusions || []));

@@ -103,6 +103,10 @@ class AnnotateRequest(BaseModel):
         "GRCh38", description="Genome assembly the coordinates/transcripts come from. GRCh38 (default) or GRCh37.")
     species: str = Field(
         "homo_sapiens", description="Species identifier. Non-human species always use RestDataProvider.")
+    tumor_type: Optional[str] = Field(
+        None,
+        description="Optional tumor type context used to focus literature curation.",
+    )
 
     @field_validator("five_exon", "three_exon", mode="before")
     @classmethod
@@ -140,6 +144,10 @@ class GeneCurationRequest(BaseModel):
     genes: list[str] = Field(
         default_factory=list,
         description="Optional gene symbols to curate; omitted means use the automatic fusion/gene fallback policy.",
+    )
+    tumor_type: Optional[str] = Field(
+        None,
+        description="Optional tumor type context used to focus literature curation.",
     )
 
 
@@ -332,6 +340,7 @@ def gene_curation(request: Request, params: GeneCurationRequest) -> dict:  # noq
             annotation_results=annotation_results,
             force_gene_curation=params.force_gene_curation,
             requested_genes=params.genes,
+            tumor_type=params.tumor_type,
         )
     except GeneCurationUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

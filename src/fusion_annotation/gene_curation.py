@@ -932,6 +932,24 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
     return list(dict.fromkeys(queries))
 
 
+def _with_tumor_type_queries(
+    queries: list[str],
+    tumor_type: Optional[str],
+    *,
+    subjects: Iterable[str] = (),
+) -> list[str]:
+    tumor = " ".join(str(tumor_type or "").split())
+    if not tumor:
+        return queries
+    expanded = list(queries)
+    for subject in subjects:
+        subject = str(subject or "").strip()
+        if subject:
+            expanded.append(f'"{subject}" AND "{tumor}"')
+    expanded.extend([f"({query}) AND \"{tumor}\"" for query in queries[:4]])
+    return list(dict.fromkeys(expanded))
+
+
 def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
     fusion_hyphen = fusion.replace("::", "-")
     genes = [part.strip() for part in fusion.replace("--", "::").split("::") if part.strip()]
@@ -1043,11 +1061,15 @@ def retrieve_pubmed_records(
     ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
+    tumor_type: Optional[str] = None,
 ) -> list[PubMedRecord]:
     fusion_contexts = fusion_contexts or []
+    subjects = [gene]
+    subjects.extend(context.partner_gene for context in fusion_contexts)
+    subjects.extend(context.fusion.replace("::", "-") for context in fusion_contexts)
     return retrieve_pubmed_records_for_queries(
         gene,
-        _pubmed_queries(gene, fusion_contexts),
+        _with_tumor_type_queries(_pubmed_queries(gene, fusion_contexts), tumor_type, subjects=subjects),
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
@@ -1185,6 +1207,9 @@ def _oncokb_gene_result(
         "gene": gene,
         "cancer_associated": _oncokb_cancer_association(gene_type),
         "rationale": _truncate_at_sentence(" ".join(rationale_parts)),
+        "cancer_association_rationale": _truncate_at_sentence(" ".join(rationale_parts), max_chars=220),
+        "gene_summary": _truncate_at_sentence(" ".join(part for part in [summary, background] if part), max_chars=520),
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "insufficient_evidence": gene_type == "INSUFFICIENT_EVIDENCE" and not summary and not background,
@@ -1208,11 +1233,13 @@ def _curation_cache_key(
     records: list[PubMedRecord],
     model: str,
     fusion_contexts: list[FusionCurationContext],
+    tumor_type: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "version": "gene-curation-v1",
         "gene": gene.upper(),
         "model": model,
+        "tumor_type": tumor_type or "",
         "fusion_contexts": _context_dicts(fusion_contexts),
         "records": [
             {
@@ -1230,11 +1257,13 @@ def _fusion_curation_cache_key(
     records: list[PubMedRecord],
     model: str,
     fusion_contexts: list[FusionCurationContext],
+    tumor_type: Optional[str] = None,
 ) -> dict[str, Any]:
     return {
         "version": "fusion-curation-v1",
         "fusion": fusion.upper(),
         "model": model,
+        "tumor_type": tumor_type or "",
         "fusion_contexts": _context_dicts(fusion_contexts),
         "records": [
             {
@@ -1255,6 +1284,9 @@ def _no_pubmed_evidence_result(
         "gene": gene,
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this gene.",
+        "cancer_association_rationale": "No PubMed abstracts were retrieved for this gene.",
+        "gene_summary": "",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
@@ -1271,6 +1303,7 @@ def _no_fusion_pubmed_evidence_result(
         "fusion_literature_identified": False,
         "cancer_associated": None,
         "rationale": "No PubMed abstracts were retrieved for this exact fusion.",
+        "supporting_citation_quotes": [],
         "supporting_pmids": [],
         "retrieved_pmids": [],
         "fusion_contexts": _context_dicts(fusion_contexts or [], include_domain_context=False),
@@ -1328,6 +1361,42 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
     return "\n".join(lines)
 
 
+def _quote_in_abstract(quote: str, abstract: str) -> bool:
+    compact_quote = " ".join(str(quote or "").split()).lower()
+    compact_abstract = " ".join(str(abstract or "").split()).lower()
+    return bool(compact_quote) and compact_quote in compact_abstract
+
+
+def _validated_supporting_quotes(payload: dict, records: list[PubMedRecord]) -> list[dict[str, str]]:
+    records_by_pmid = {record.pmid: record for record in records}
+    raw_items = payload.get("supporting_citation_quotes") or payload.get("supporting_quotes") or []
+    if not isinstance(raw_items, list):
+        return []
+    validated = []
+    seen = set()
+    for item in raw_items:
+        if isinstance(item, dict):
+            pmid = str(item.get("pmid") or "").strip()
+            quote = str(item.get("quote") or "").strip()
+        else:
+            continue
+        record = records_by_pmid.get(pmid)
+        quote = " ".join(quote.split())
+        if not record or not quote or len(quote) > 260:
+            continue
+        key = (pmid, quote)
+        if key in seen or not _quote_in_abstract(quote, record.abstract):
+            continue
+        seen.add(key)
+        validated.append({"pmid": pmid, "quote": quote})
+    return validated
+
+
+def _attach_validated_quotes(payload: dict, records: list[PubMedRecord]) -> dict:
+    payload["supporting_citation_quotes"] = _validated_supporting_quotes(payload, records)
+    return payload
+
+
 def curate_gene(
     gene: str,
     *,
@@ -1339,6 +1408,7 @@ def curate_gene(
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
     oncokb_genes_by_symbol: Optional[dict[str, dict]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     fusion_contexts = fusion_contexts or []
     oncokb_result = _oncokb_gene_result(
@@ -1358,11 +1428,12 @@ def curate_gene(
         ncbi_client=ncbi_client,
         max_results=max_results,
         fusion_contexts=fusion_contexts,
+        tumor_type=tumor_type,
     )
     if not records:
         return _no_pubmed_evidence_result(gene, fusion_contexts)
 
-    cache_key = _curation_cache_key(gene, records, model, fusion_contexts)
+    cache_key = _curation_cache_key(gene, records, model, fusion_contexts, tumor_type)
     cache_key["abstract_chars"] = abstract_chars
     result_ttl_seconds = max(
         0,
@@ -1373,6 +1444,7 @@ def curate_gene(
         cached = _repair_json_rationale(cached)
         cached.setdefault("gene", gene)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached = _attach_validated_quotes(cached, records)
         cached["fusion_contexts"] = _context_dicts(
             fusion_contexts,
             include_domain_context=_payload_references_domain_context(cached),
@@ -1386,6 +1458,7 @@ def curate_gene(
     )
     prompt = f"""\
 Gene: {gene}
+Tumor type supplied by user: {tumor_type or 'not supplied'}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
@@ -1400,7 +1473,10 @@ Return one JSON object with:
   Write 1-2 short sentences, ideally 40-75 words total. Prioritize the
   classification-relevant conclusion, strongest mechanism/cancer context, and
   one caveat if needed. Do not enumerate every paper or make a literature-review paragraph.
+- cancer_association_rationale: one concise sentence, ideally 25-40 words, describing the strongest cancer evidence.
+- gene_summary: 2 short evidence sentences, ideally 60-90 words total, optimized for curator scanning.
 - supporting_pmids: up to 4 PMIDs from the context
+- supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the context is too sparse
@@ -1444,6 +1520,9 @@ junction, retained/lost domains, or kinase-domain retention.
     payload = _repair_json_rationale(payload)
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload.setdefault("cancer_association_rationale", payload.get("rationale", ""))
+    payload.setdefault("gene_summary", payload.get("rationale", ""))
+    payload = _attach_validated_quotes(payload, records)
     payload["fusion_contexts"] = _context_dicts(
         fusion_contexts,
         include_domain_context=_payload_references_domain_context(payload),
@@ -1463,6 +1542,7 @@ def curate_fusion(
     max_results: int = 8,
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     if not anthropic_api_key:
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
@@ -1470,7 +1550,11 @@ def curate_fusion(
     fusion_contexts = fusion_contexts or []
     records = retrieve_pubmed_records_for_queries(
         fusion,
-        _fusion_pubmed_queries(fusion, fusion_contexts),
+        _with_tumor_type_queries(
+            _fusion_pubmed_queries(fusion, fusion_contexts),
+            tumor_type,
+            subjects=[fusion, fusion.replace("::", "-")],
+        ),
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
@@ -1478,7 +1562,7 @@ def curate_fusion(
     if not records:
         return _no_fusion_pubmed_evidence_result(fusion, fusion_contexts)
 
-    cache_key = _fusion_curation_cache_key(fusion, records, model, fusion_contexts)
+    cache_key = _fusion_curation_cache_key(fusion, records, model, fusion_contexts, tumor_type)
     cache_key["abstract_chars"] = abstract_chars
     result_ttl_seconds = max(
         0,
@@ -1489,6 +1573,7 @@ def curate_fusion(
         cached = _repair_json_rationale(cached)
         cached.setdefault("fusion", fusion)
         cached.setdefault("retrieved_pmids", [record.pmid for record in records])
+        cached = _attach_validated_quotes(cached, records)
         cached["fusion_contexts"] = _context_dicts(
             fusion_contexts,
             include_domain_context=_payload_references_domain_context(cached),
@@ -1501,6 +1586,7 @@ def curate_fusion(
     )
     prompt = f"""\
 Fusion: {fusion}
+Tumor type supplied by user: {tumor_type or 'not supplied'}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
@@ -1517,6 +1603,7 @@ Return one JSON object with:
   fusion is described in the literature, the strongest cancer/mechanistic context,
   and one caveat if needed.
 - supporting_pmids: up to 4 PMIDs from the context
+- supporting_citation_quotes: for each supporting PMID, include one short verbatim quote copied from that PMID's abstract.
 - retrieved_pmids: all PMIDs provided in the context
 - fusion_contexts: echo the provided fusion context as compact JSON-compatible objects
 - insufficient_evidence: true when the exact fusion literature context is too sparse
@@ -1557,6 +1644,7 @@ kinase-domain status beyond the Genome Nexus context.
     payload = _repair_json_rationale(payload)
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload = _attach_validated_quotes(payload, records)
     payload["fusion_contexts"] = _context_dicts(
         fusion_contexts,
         include_domain_context=_payload_references_domain_context(payload),
@@ -1579,6 +1667,7 @@ def curate_fusion_genes(
     *,
     force_gene_curation: bool = False,
     requested_genes: Optional[Iterable[str]] = None,
+    tumor_type: Optional[str] = None,
 ) -> dict:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
     if not anthropic_api_key:
@@ -1613,6 +1702,7 @@ def curate_fusion_genes(
                 max_results=max_results,
                 abstract_chars=abstract_chars,
                 fusion_contexts=contexts,
+                tumor_type=tumor_type,
             ): fusion
             for fusion, contexts in contexts_by_fusion.items()
         }
@@ -1694,6 +1784,7 @@ def curate_fusion_genes(
                 abstract_chars=abstract_chars,
                 fusion_contexts=contexts_by_gene.get(gene, []),
                 oncokb_genes_by_symbol=oncokb_genes_by_symbol,
+                tumor_type=tumor_type,
             ): gene
             for gene in genes
         }

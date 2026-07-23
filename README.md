@@ -420,13 +420,16 @@ section at the bottom of each fusion annotation result rather than as a separate
 top-level results block. Curation runs fusion-first: it retrieves and summarizes
 literature for the exact fusion, including whether the fusion itself is
 identified in PubMed, driver/actionability rationale, supporting PMIDs,
-retrieved PMIDs, and any Genome Nexus fusion-position context used by the run.
+short abstract quotes for those PMIDs when available, retrieved PMIDs, and any
+Genome Nexus fusion-position context used by the run. An optional tumor type
+can be supplied from the UI/API to bias PubMed retrieval and curation summaries
+toward the disease context under review.
 When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
 skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
 per-gene override when deeper review is needed. When exact-fusion literature is
 sparse, the two involved gene sections can be expanded to review gene-level
-driver signal, rationale, supporting PMIDs, and retrieved PMIDs. Gene-level
-curation checks OncoKB first via the curated-gene list and
+driver signal, rationale, gene summary, supporting PMIDs, supporting abstract
+quotes, and retrieved PMIDs. Gene-level curation checks OncoKB first via the curated-gene list and
 uses the OncoKB gene type, summary/background, and highest evidence levels when
 available. That avoids PubMed retrieval and LLM synthesis for genes already
 covered by OncoKB. PubMed/LLM gene synthesis is only used when an OncoKB token
