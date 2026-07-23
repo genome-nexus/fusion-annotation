@@ -128,6 +128,71 @@ export interface BatchAnnotationResponse {
   results: BatchAnnotationItemResult[];
 }
 
+export interface GeneCurationStatus {
+  enabled: boolean;
+  model: string;
+}
+
+export interface GeneFusionCurationContext {
+  gene: string;
+  fusion: string;
+  side: "five_prime" | "three_prime";
+  partner_gene: string;
+  breakpoint_context_available?: boolean;
+  fusion_specificity?: "gene_pair_only" | "exon_level" | "protein_domain_level";
+  five_transcript?: string | null;
+  three_transcript?: string | null;
+  five_exon?: string | null;
+  three_exon?: string | null;
+  five_genomic?: string | null;
+  three_genomic?: string | null;
+  five_protein_breakpoint?: string | null;
+  three_protein_breakpoint?: string | null;
+  retained_domains?: string[];
+  lost_domains?: string[];
+  disrupted_domains?: string[];
+  kinase_gene?: string | null;
+  kinase_gene_side?: "five_prime" | "three_prime" | null;
+  kinase_domain_status?: "retained" | "lost" | "disrupted" | "unknown" | null;
+  limitations?: string[];
+  annotation_error?: string | null;
+}
+
+export interface GeneCurationGeneResult {
+  gene: string;
+  cancer_associated?: boolean | null;
+  rationale?: string;
+  supporting_pmids?: string[];
+  retrieved_pmids?: string[];
+  fusion_contexts?: GeneFusionCurationContext[];
+  insufficient_evidence?: boolean;
+  curation_source?: string;
+  oncokb_gene_type?: string;
+  oncokb_summary?: string;
+  oncokb_background?: string;
+  oncokb_highest_sensitive_level?: string;
+  oncokb_highest_resistance_level?: string;
+  oncokb_url?: string;
+  error?: string;
+}
+
+export interface GeneCurationFusionResult {
+  fusion: string;
+  fusion_literature_identified?: boolean | null;
+  cancer_associated?: boolean | null;
+  rationale?: string;
+  supporting_pmids?: string[];
+  retrieved_pmids?: string[];
+  fusion_contexts?: GeneFusionCurationContext[];
+  insufficient_evidence?: boolean;
+  error?: string;
+}
+
+export interface GeneCurationResponse {
+  fusions?: GeneCurationFusionResult[];
+  genes: GeneCurationGeneResult[];
+}
+
 // The inputs a caller supplies — mirrors AnnotateRequest in api/app.py, and is
 // exactly what gets encoded into the permalink's URL query string.
 export interface AnnotateParams {
@@ -141,7 +206,7 @@ export interface AnnotateParams {
   three_transcript?: string;
   genome_build: string;
   variant_type?: string;
-  input_mode?: "exon" | "genomic";
+  input_mode?: "exon" | "genomic" | "gene_pair";
 }
 
 export interface ApiError {

@@ -108,7 +108,6 @@ def test_annotate_batch_returns_per_fusion_results(client):
     assert body["results"][2]["result"] is None
     assert "NOPE_NOT_A_GENE" in body["results"][2]["error"]
 
-
 def test_annotate_batch_reuses_provider_by_species_and_build(monkeypatch):
     calls = []
 
@@ -209,6 +208,121 @@ def test_annotate_batch_runs_rows_in_parallel(monkeypatch):
         "CD74::ROS1",
     ]
     assert elapsed < 0.3
+
+
+def test_gene_curation_status_reports_disabled_without_key(client, monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    r = client.get("/api/gene-curation/status")
+
+    assert r.status_code == 200
+    assert r.json()["enabled"] is False
+
+
+def test_gene_curation_uses_server_side_service(client, monkeypatch):
+    seen = {}
+
+    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
+        seen["fusions"] = fusions
+        seen["annotation_results"] = annotation_results
+        seen["force_gene_curation"] = force_gene_curation
+        return {
+            "fusions": [],
+            "genes": [
+                {
+                    "gene": "ALK",
+                    "cancer_associated": True,
+                    "rationale": "ALK fusions are oncogenic.",
+                    "supporting_pmids": ["1"],
+                    "retrieved_pmids": ["1", "2"],
+                    "insufficient_evidence": False,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(api_app, "curate_fusion_genes", fake_curate_fusion_genes)
+
+    r = client.post("/api/gene-curation", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": 13, "three_exon": 20}
+        ]
+    })
+
+    assert r.status_code == 200
+    assert seen["fusions"][0].five_gene == "EML4"
+    assert seen["annotation_results"][0]["result"]["interface"]["categorical_key"] == "EML4::ALK"
+    assert seen["force_gene_curation"] is False
+    assert r.json()["genes"][0]["gene"] == "ALK"
+
+
+def test_gene_curation_accepts_gene_pair_only_rows(client, monkeypatch):
+    seen = {}
+
+    def fake_curate_fusion_genes(fusions, annotation_results=None, force_gene_curation=False):
+        seen["fusions"] = fusions
+        seen["annotation_results"] = annotation_results
+        seen["force_gene_curation"] = force_gene_curation
+        return {
+            "fusions": [],
+            "genes": [
+                {
+                    "gene": "ROS1",
+                    "cancer_associated": None,
+                    "rationale": "Gene-pair-level curation only.",
+                    "supporting_pmids": [],
+                    "retrieved_pmids": [],
+                    "fusion_contexts": [],
+                    "insufficient_evidence": True,
+                }
+            ]
+        }
+
+    monkeypatch.setattr(api_app, "curate_fusion_genes", fake_curate_fusion_genes)
+
+    r = client.post("/api/gene-curation", json={
+        "fusions": [
+            {"five_gene": "EML4", "three_gene": "ALK", "five_exon": "", "three_exon": ""}
+        ]
+    })
+
+    assert r.status_code == 200
+    assert seen["fusions"][0].five_gene == "EML4"
+    assert seen["fusions"][0].five_exon is None
+    assert seen["fusions"][0].three_exon is None
+    assert seen["force_gene_curation"] is False
+    assert seen["annotation_results"][0]["result"]["interface"]["frame_status"] == "unknown"
+    assert seen["annotation_results"][0].get("error") is None
+    assert r.json()["genes"][0]["gene"] == "ROS1"
+
+
+def test_gene_curation_ui_uses_reviewer_facing_badges():
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+    app_tsx = open(os.path.join(root, "web", "src", "App.tsx")).read()
+    result_view_tsx = open(os.path.join(root, "web", "src", "components", "ResultView.tsx")).read()
+    styles = open(os.path.join(root, "web", "src", "App.css")).read()
+
+    assert "Batch annotation" in app_tsx
+    assert "batch-review-layout" in app_tsx
+    assert "Fusion and gene information" in result_view_tsx
+    assert "Functional cancer evidence" in result_view_tsx
+    assert "Review priority" in result_view_tsx
+    assert "without changing backend schema or tier logic" in result_view_tsx
+    assert "breakpoint context unavailable" in result_view_tsx
+    assert "fusion_specificity" in app_tsx
+    assert "curation_source" in app_tsx
+    assert "fusion-curation-context" in result_view_tsx
+    assert "Export curation CSV" in result_view_tsx
+    assert "Fusion in literature" in result_view_tsx
+    assert "OncoKB gene type" in result_view_tsx
+    assert "Rationale Supporting PMIDs" in result_view_tsx
+    assert "Get fusion info" in result_view_tsx
+    assert "Get gene details" in result_view_tsx
+    assert "fusion_gene_curation.csv" in app_tsx
+    assert ".workflow-tabs" in styles
+    assert ".batch-review-layout" in styles
+    assert ".gene-info-section" in styles
+    assert ".curation-badges" in styles
+    assert ".fusion-curation-contexts" in styles
 
 
 def test_annotate_missing_required_field(client):

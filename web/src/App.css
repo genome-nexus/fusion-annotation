@@ -49,6 +49,29 @@ header .tagline {
   cursor: default;
 }
 
+.workflow-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #dee2e6;
+  margin-bottom: 18px;
+}
+
+.workflow-tab {
+  appearance: none;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: #495057;
+  cursor: pointer;
+  font-weight: 700;
+  padding: 10px 16px 9px;
+}
+
+.workflow-tab.active {
+  border-bottom-color: #1971c2;
+  color: #1864ab;
+}
+
 .fusion-form {
   display: flex;
   flex-direction: column;
@@ -109,18 +132,78 @@ header .tagline {
   resize: vertical;
 }
 
+.batch-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .batch-results {
   margin-top: 24px;
 }
 
-.batch-result-item {
-  border-top: 2px solid #dee2e6;
-  padding-top: 20px;
-  margin-top: 20px;
+.batch-results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
 }
 
-.batch-result-item > h3 {
+.batch-results-header h2,
+.batch-results-header p {
+  margin: 0;
+}
+
+.batch-results-header p {
+  margin-top: 4px;
+  color: #495057;
+}
+
+.batch-review-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.batch-run-list {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  top: 12px;
+}
+
+.batch-run-item {
+  appearance: none;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background: #fff;
+  color: #212529;
+  cursor: pointer;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.batch-run-item.active {
+  border-color: #74c0fc;
+  background: #e7f5ff;
+}
+
+.batch-run-item span {
   font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.batch-run-item small {
+  color: #5c6770;
+}
+
+.batch-review-pane {
+  min-width: 0;
 }
 
 /* Input-mode tab strip */
@@ -209,6 +292,22 @@ header .tagline {
   cursor: default;
 }
 
+.secondary-button {
+  align-self: flex-start;
+  padding: 8px 20px;
+  background: #fff;
+  color: #1971c2;
+  border: 1px solid #74c0fc;
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+}
+
+.secondary-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .error-box {
   background: #fff5f5;
   border: 1px solid #ffa8a8;
@@ -216,6 +315,275 @@ header .tagline {
   padding: 10px 14px;
   border-radius: 6px;
   margin-bottom: 20px;
+}
+
+.notice-box {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  color: #495057;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 20px;
+}
+
+.gene-curation-results {
+  margin-top: 24px;
+}
+
+.gene-curation-results-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.gene-curation-results-header h2 {
+  margin: 0;
+}
+
+.gene-curation-note {
+  margin: 6px 0 0;
+  color: #495057;
+}
+
+.gene-curation-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.gene-curation-card {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+
+.gene-curation-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.gene-curation-card-header h3 {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.curation-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.fusion-curation-contexts {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.fusion-curation-context {
+  border: 1px solid #d6e0e2;
+  border-radius: 6px;
+  background: #f7faf9;
+  padding: 12px;
+}
+
+.fusion-curation-context-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.fusion-curation-context-title strong {
+  font-size: 0.95rem;
+}
+
+.fusion-curation-context-title span {
+  color: #5d6f76;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.fusion-curation-context dl {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.fusion-curation-context dt {
+  color: #5d6f76;
+  font-weight: 700;
+}
+
+.fusion-curation-context dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.fusion-curation-context-error {
+  margin: 9px 0 0;
+  color: #8a5a00;
+  font-size: 0.82rem;
+}
+
+.fusion-curation-limitations {
+  margin: 9px 0 0;
+  padding-left: 18px;
+  color: #5f4b00;
+  font-size: 0.82rem;
+}
+
+.fusion-curation-limitations li + li {
+  margin-top: 4px;
+}
+
+.gene-info-section {
+  border-top: 2px solid #dee2e6;
+  margin-top: 28px;
+  padding-top: 20px;
+}
+
+.gene-info-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.gene-info-header h3,
+.gene-info-header p {
+  margin: 0;
+}
+
+.gene-info-header p {
+  margin-top: 4px;
+  color: #495057;
+}
+
+.gene-info-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.gene-info-list {
+  display: grid;
+  gap: 10px;
+}
+
+.gene-info-item {
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.gene-info-item summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 12px 14px;
+}
+
+.gene-info-symbol {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-weight: 800;
+}
+
+.gene-info-summary {
+  color: #495057;
+  font-size: 0.88rem;
+  text-align: right;
+}
+
+.gene-info-body {
+  border-top: 1px solid #edf2f7;
+  padding: 12px 14px 14px;
+}
+
+.gene-info-body .curation-badges {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
+.gene-info-empty {
+  border-top: 1px solid #edf2f7;
+  color: #495057;
+  margin: 0;
+  padding: 12px 14px 14px;
+}
+
+.gene-info-skip {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+
+.status-chip {
+  border-radius: 999px;
+  background: #d3f9d8;
+  color: #2b8a3e;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  white-space: nowrap;
+}
+
+.status-chip.attention {
+  background: #fff3bf;
+  color: #8d6500;
+}
+
+.status-chip.evidence {
+  background: #e6fcf5;
+  color: #087f5b;
+}
+
+.status-chip.neutral {
+  background: #e7f5ff;
+  color: #1864ab;
+}
+
+.status-chip.muted {
+  background: #f1f3f5;
+  color: #868e96;
+}
+
+.gene-curation-fields {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+}
+
+.gene-curation-fields dt,
+.pmid-row strong {
+  color: #495057;
+  font-weight: 600;
+}
+
+.gene-curation-fields dd {
+  margin: 0;
+  word-break: break-word;
+}
+
+.pmid-row {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  margin-top: 8px;
+  word-break: break-word;
 }
 
 .permalink-row {
@@ -674,4 +1042,42 @@ a code {
 .version-footnote a {
   color: inherit;
   font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+@media (max-width: 760px) {
+  .batch-form-header,
+  .batch-results-header,
+  .gene-info-header {
+    display: grid;
+  }
+
+  .batch-format {
+    white-space: normal;
+  }
+
+  .batch-review-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .batch-run-list {
+    position: static;
+  }
+
+  .gene-info-actions {
+    justify-content: flex-start;
+  }
+
+  .gene-info-skip {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .gene-info-item summary {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .gene-info-summary {
+    text-align: left;
+  }
 }

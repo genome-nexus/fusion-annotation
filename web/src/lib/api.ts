@@ -1,4 +1,11 @@
-import type { AnnotateParams, AnnotationResult, ApiError, BatchAnnotationResponse } from "./types";
+import type {
+  AnnotateParams,
+  AnnotationResult,
+  ApiError,
+  BatchAnnotationResponse,
+  GeneCurationResponse,
+  GeneCurationStatus,
+} from "./types";
 
 // Base URL of the deployed REST API (api/app.py). In dev, Vite's proxy
 // (vite.config.ts) forwards /api to a locally-running API, so this can stay
@@ -15,6 +22,19 @@ function toSearchParams(params: AnnotateParams): URLSearchParams {
     }
   }
   return search;
+}
+
+function cleanAnnotateParams(params: AnnotateParams) {
+  const cleaned: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    if ((key === "five_exon" || key === "three_exon") && typeof value === "string") {
+      cleaned[key] = Number(value);
+    } else {
+      cleaned[key] = value;
+    }
+  }
+  return cleaned;
 }
 
 /** FastAPI/Pydantic validation errors (HTTP 422) return `detail` as a list of
@@ -64,7 +84,51 @@ export async function annotateFusionBatch(
   const response = await fetch(`${API_BASE_URL}/api/annotate/batch`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fusions }),
+    body: JSON.stringify({ fusions: fusions.map(cleanAnnotateParams) }),
+    signal,
+  });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = formatDetail(body?.detail, detail);
+    } catch {
+      // response body wasn't JSON — fall back to statusText
+    }
+    const error: ApiError = { status: response.status, detail };
+    throw error;
+  }
+  return response.json();
+}
+
+export async function getGeneCurationStatus(signal?: AbortSignal): Promise<GeneCurationStatus> {
+  const response = await fetch(`${API_BASE_URL}/api/gene-curation/status`, { signal });
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const body = await response.json();
+      detail = formatDetail(body?.detail, detail);
+    } catch {
+      // response body wasn't JSON — fall back to statusText
+    }
+    const error: ApiError = { status: response.status, detail };
+    throw error;
+  }
+  return response.json();
+}
+
+export async function curateFusionGenes(
+  fusions: AnnotateParams[],
+  forceGeneCuration = false,
+  signal?: AbortSignal,
+): Promise<GeneCurationResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/gene-curation`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      fusions: fusions.map(cleanAnnotateParams),
+      force_gene_curation: forceGeneCuration,
+    }),
     signal,
   });
   if (!response.ok) {

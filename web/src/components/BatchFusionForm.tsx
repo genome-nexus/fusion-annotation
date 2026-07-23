@@ -4,7 +4,10 @@ import type { AnnotateParams } from "../lib/types";
 interface Props {
   genomeBuild: string;
   onSubmit: (params: AnnotateParams[]) => void;
+  onCurate?: (params: AnnotateParams[]) => void;
   loading: boolean;
+  curationLoading?: boolean;
+  curationEnabled?: boolean;
 }
 
 function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | null {
@@ -18,8 +21,16 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
   if (!fiveGene || !threeGene) {
     throw new Error(`Could not parse fusion partners from line: ${line}`);
   }
+  if (!fiveExon && !threeExon) {
+    return {
+      five_gene: fiveGene,
+      three_gene: threeGene,
+      genome_build: genomeBuild,
+      input_mode: "gene_pair",
+    };
+  }
   if (!fiveExon || !threeExon) {
-    throw new Error(`Batch exon mode requires five_exon and three_exon: ${line}`);
+    throw new Error(`Provide both exon numbers, or leave both blank for gene-pair-only curation: ${line}`);
   }
   if (!/^\d+$/.test(fiveExon) || !/^\d+$/.test(threeExon)) {
     throw new Error(`Exon numbers must be positive integers: ${line}`);
@@ -34,22 +45,42 @@ function parseBatchLine(line: string, genomeBuild: string): AnnotateParams | nul
   };
 }
 
-export function BatchFusionForm({ genomeBuild, onSubmit, loading }: Props) {
-  const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2");
+export function BatchFusionForm({
+  genomeBuild,
+  onSubmit,
+  onCurate,
+  loading,
+  curationLoading = false,
+  curationEnabled = false,
+}: Props) {
+  const [text, setText] = useState("EML4::ALK,13,20\nBCR::ABL1,13,2\nCD74::ROS1");
   const [parseError, setParseError] = useState<string | null>(null);
+
+  function parseInput(): AnnotateParams[] {
+    const parsed = text
+      .split(/\r?\n/)
+      .map((line) => parseBatchLine(line, genomeBuild))
+      .filter((item): item is AnnotateParams => item !== null);
+    if (!parsed.length) {
+      throw new Error("Add at least one fusion line before running a batch.");
+    }
+    setParseError(null);
+    return parsed;
+  }
 
   function handleSubmit(event: FormEvent) {
     event.preventDefault();
     try {
-      const parsed = text
-        .split(/\r?\n/)
-        .map((line) => parseBatchLine(line, genomeBuild))
-        .filter((item): item is AnnotateParams => item !== null);
-      if (!parsed.length) {
-        throw new Error("Add at least one fusion line before running a batch.");
-      }
-      setParseError(null);
-      onSubmit(parsed);
+      onSubmit(parseInput());
+    } catch (error) {
+      setParseError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleCurate() {
+    if (!onCurate) return;
+    try {
+      onCurate(parseInput());
     } catch (error) {
       setParseError(error instanceof Error ? error.message : String(error));
     }
@@ -60,9 +91,9 @@ export function BatchFusionForm({ genomeBuild, onSubmit, loading }: Props) {
       <div className="batch-form-header">
         <div>
           <h2>Batch annotation</h2>
-          <p>Run multiple exon-defined fusions against the same Genome Nexus workflow.</p>
+          <p>Run exact breakpoint rows when available; gene-pair-only rows can still be curated.</p>
         </div>
-        <span className="batch-format">GENE1::GENE2, five_exon, three_exon</span>
+        <span className="batch-format">GENE1::GENE2[, five_exon, three_exon]</span>
       </div>
       <textarea
         value={text}
@@ -72,9 +103,21 @@ export function BatchFusionForm({ genomeBuild, onSubmit, loading }: Props) {
         aria-label="Batch fusion input"
       />
       {parseError && <div className="error-box">{parseError}</div>}
-      <button type="submit" disabled={loading} className="submit-button">
-        {loading ? "Annotating batch..." : "Annotate batch"}
-      </button>
+      <div className="batch-actions">
+        <button type="submit" disabled={loading || curationLoading} className="submit-button">
+          {loading ? "Annotating batch..." : "Annotate batch"}
+        </button>
+        {onCurate && (
+          <button
+            type="button"
+            disabled={!curationEnabled || loading || curationLoading}
+            className="secondary-button"
+            onClick={handleCurate}
+          >
+            {curationLoading ? "Loading fusion info..." : "Get fusion info"}
+          </button>
+        )}
+      </div>
     </form>
   );
 }
