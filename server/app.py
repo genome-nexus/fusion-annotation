@@ -170,6 +170,73 @@ def annotate_gene_fusion(
     return CallToolResult(content=content, structuredContent=result)
 
 
+@mcp.tool()
+def curate_fusion(
+    five_gene: str,
+    three_gene: str,
+    five_exon: int | None = None,
+    three_exon: int | None = None,
+    five_genomic: int | str | None = None,
+    three_genomic: int | str | None = None,
+    genome_build: str = "GRCh38",
+    tumor_type: str | None = None,
+    force_gene_curation: bool = False,
+) -> CallToolResult:
+    """Curate a gene fusion with literature and clinical knowledge.
+
+    Retrieves PubMed literature, OncoKB gene data, and CIViC evidence for
+    the fusion and its partner genes, then uses Claude to synthesise a
+    structured curation summary covering:
+    - Whether the fusion has been observed in the literature / in cancer
+    - Functional oncogenicity and therapeutic response
+    - Per-gene cancer role, mutation and expression profiles
+    - Supporting PMIDs and high-impact journal flags (★)
+
+    Results are cached locally (file-based by default) so repeat queries for
+    the same fusion and tumor type skip the LLM call entirely.
+
+    Requires ANTHROPIC_API_KEY to be set in the server environment.
+
+    Args:
+        five_gene: 5' partner gene symbol, e.g. "EML4".
+        three_gene: 3' partner gene symbol, e.g. "ALK".
+        five_exon: last exon (1-based) contributed by the 5' partner.
+        three_exon: first exon (1-based) contributed by the 3' partner.
+        five_genomic: genomic breakpoint on the 5' partner.
+        three_genomic: genomic breakpoint on the 3' partner.
+        genome_build: genome assembly — "GRCh38" (default) or "GRCh37".
+        tumor_type: optional tumor/cancer type context (e.g. "lung adenocarcinoma")
+            used to bias literature retrieval toward the disease under review.
+        force_gene_curation: if True, run per-gene literature curation even
+            when sufficient fusion-level literature was found (default False).
+    """
+    from types import SimpleNamespace
+    from fusion_annotation.gene_curation import curate_fusion_genes, GeneCurationUnavailable
+
+    fusion = SimpleNamespace(
+        five_gene=five_gene,
+        three_gene=three_gene,
+        five_exon=five_exon,
+        three_exon=three_exon,
+        five_genomic=str(five_genomic) if five_genomic is not None else None,
+        three_genomic=str(three_genomic) if three_genomic is not None else None,
+        genome_build=genome_build,
+        tumor_type=tumor_type,
+    )
+    try:
+        result = curate_fusion_genes(
+            [fusion],
+            annotation_results=None,
+            force_gene_curation=force_gene_curation,
+        )
+    except GeneCurationUnavailable as exc:
+        return CallToolResult(
+            content=[TextContent(type="text", text=f"Curation unavailable: {exc}")],
+            isError=True,
+        )
+    return CallToolResult(content=[TextContent(type="text", text=_json_dumps(result))])
+
+
 def _json_dumps(result: dict) -> str:
     import json
     return json.dumps(result, indent=2)

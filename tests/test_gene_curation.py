@@ -1,11 +1,20 @@
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from fusion_annotation import gene_curation
 from fusion_annotation.gene_curation import (
     FusionCurationContext,
     PubMedRecord,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_cache_backend(monkeypatch, tmp_path):
+    monkeypatch.setattr(gene_curation, "_CACHE_BACKEND", None)
+    monkeypatch.setattr(gene_curation, "_CACHE_BACKEND_CONFIG", None)
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE_DIR", str(tmp_path / "gene-curation-cache"))
 
 
 def test_retrieve_pubmed_records_preserves_mixed_content_xml(monkeypatch):
@@ -116,6 +125,7 @@ def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
         assert url == gene_curation.EFETCH_URL
         return FetchResponse()
 
+    monkeypatch.setenv("FUSION_GENE_CURATION_CACHE", "0")
     monkeypatch.setattr(gene_curation.requests, "get", fake_get)
     client = gene_curation.NcbiClient(
         min_interval_seconds=0,
