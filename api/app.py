@@ -103,6 +103,11 @@ class AnnotateRequest(BaseModel):
         "GRCh38", description="Genome assembly the coordinates/transcripts come from. GRCh38 (default) or GRCh37.")
     species: str = Field(
         "homo_sapiens", description="Species identifier. Non-human species always use RestDataProvider.")
+    tumor_type: Optional[str] = Field(
+        None,
+        description="Optional tumor/cancer type (e.g. 'lung adenocarcinoma') used to bias literature "
+                    "curation toward the disease context under review.",
+    )
 
     @field_validator("five_exon", "three_exon", mode="before")
     @classmethod
@@ -257,6 +262,7 @@ def annotate_get(
     three_transcript: Optional[str] = Query(None),
     genome_build: str = Query("GRCh38"),
     species: str = Query("homo_sapiens"),
+    tumor_type: Optional[str] = Query(None, description="Optional tumor type, e.g. 'lung adenocarcinoma'"),
 ) -> dict:
     """Annotate a gene fusion. Inputs as query params, so this URL is a
     shareable permalink — reopening it re-runs the annotation (nothing is
@@ -271,7 +277,7 @@ def annotate_get(
         five_exon=five_exon, three_exon=three_exon,
         five_genomic=five_genomic, three_genomic=three_genomic,
         five_transcript=five_transcript, three_transcript=three_transcript,
-        genome_build=genome_build, species=species)
+        genome_build=genome_build, species=species, tumor_type=tumor_type)
     return _run_annotation(params)
 
 

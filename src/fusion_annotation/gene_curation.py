@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
+import re
 import threading
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -30,6 +31,9 @@ class PubMedRecord:
     pmid: str
     title: str
     abstract: str
+    publication_types: tuple[str, ...] = ()
+    mesh_terms: tuple[str, ...] = ()
+    journal: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,6 +58,7 @@ class FusionCurationContext:
     kinase_gene: Optional[str] = None
     kinase_gene_side: Optional[str] = None
     kinase_domain_status: Optional[str] = None
+    tumor_type: Optional[str] = None
     limitations: tuple[str, ...] = ()
     annotation_error: Optional[str] = None
 
@@ -320,6 +325,7 @@ def _context_for_gene(
         kinase_gene=kinase_gene,
         kinase_gene_side=kinase_side,
         kinase_domain_status=kinase_status,
+        tumor_type=_optional_str(_fusion_value(fusion, "tumor_type")),
         limitations=_context_limitations(result=result, error=error),
         annotation_error=error,
     )
@@ -384,19 +390,273 @@ def _strip_markdown_json_fence(text: str) -> str:
     return cleaned
 
 
+_HUMAN_CLINICAL_TERMS = (
+    "clinical trial",
+    "phase i",
+    "phase ii",
+    "phase iii",
+    "patients",
+    "patient",
+    "case report",
+    "case series",
+    "cohort",
+    "retrospective",
+    "prospective",
+    "therapy",
+    "therapeutic",
+    "treated",
+    "response",
+)
+_CELL_LINE_TERMS = (
+    "cell line",
+    "cell lines",
+    "in vitro",
+    "ba/f3",
+    "nih3t3",
+    "transformation assay",
+    "proliferation assay",
+    "soft agar",
+)
+_MOUSE_MODEL_TERMS = (
+    "mouse",
+    "mice",
+    "murine",
+    "xenograft",
+    "in vivo",
+)
+_STRUCTURAL_CONTEXT_TERMS = (
+    "breakpoint",
+    "breakpoints",
+    "variant",
+    "variants",
+    "exon",
+    "exons",
+    "transcript",
+    "frame",
+    "in-frame",
+    "domain",
+    "kinase domain",
+    "retained",
+    "retention",
+)
+
+# Publication type sub-ranks (lower = higher-quality study design).
+# Used within each evidence tier so a Phase III RCT surfaces above a case report
+# even when both mention the same clinical terms.
+_PUB_TYPE_PHASE3 = frozenset({
+    "randomized controlled trial",
+    "clinical trial, phase iii",
+    "clinical trial, phase ii and phase iii",
+})
+_PUB_TYPE_PHASE2 = frozenset({
+    "clinical trial, phase ii",
+    "clinical trial, phase i and phase ii",
+})
+_PUB_TYPE_CLINICAL = frozenset({
+    "clinical trial",
+    "clinical trial, phase i",
+    "controlled clinical trial",
+    "multicenter study",
+})
+_PUB_TYPE_CASE_REPORT = frozenset({
+    "case reports",
+})
+
+# MedlineTA abbreviated journal names that warrant priority flagging for curators.
+# Papers in these journals surface above equal-ranked papers from other sources.
+_HIGH_IMPACT_JOURNALS: frozenset[str] = frozenset({
+    # General high-impact
+    "N Engl J Med", "Lancet", "JAMA", "BMJ", "Nat Med", "Nat Genet",
+    "Nature", "Science", "Cell", "Nat Cancer", "Nat Commun",
+    "Sci Transl Med", "EMBO J",
+    # Oncology
+    "J Clin Oncol", "Cancer Cell", "Cancer Discov", "Cancer Res",
+    "Clin Cancer Res", "Ann Oncol", "Lancet Oncol", "JAMA Oncol",
+    "Mol Cancer Ther", "Mol Cancer", "Oncogene", "Cancer Lett",
+    # Hematology
+    "Blood", "Leukemia", "J Hematol Oncol", "Haematologica",
+    # Genomics
+    "Genome Res", "Genome Biol", "Nucleic Acids Res", "Nat Biotechnol",
+})
+
+
+def _or_terms(terms: Iterable[str]) -> str:
+    return " OR ".join(f'"{term}"' for term in terms)
+
+
+def _evidence_priority_queries(subject: str) -> list[str]:
+    return [
+        f'"{subject}" AND ({_or_terms(_HUMAN_CLINICAL_TERMS)})',
+        f'"{subject}" AND ({_or_terms(_CELL_LINE_TERMS)})',
+        f'"{subject}" AND ({_or_terms(_MOUSE_MODEL_TERMS)})',
+    ]
+
+
+def _record_text(record: PubMedRecord) -> str:
+    return " ".join((
+        record.title,
+        record.abstract,
+        " ".join(record.publication_types),
+        " ".join(record.mesh_terms),
+    )).lower()
+
+
+def _contains_phrase_or_token(text: str, term: str) -> bool:
+    return re.search(rf"(?<![a-z0-9]){re.escape(term.lower())}(?![a-z0-9])", text) is not None
+
+
+def _publication_evidence_rank(record: PubMedRecord) -> int:
+    text = _record_text(record)
+    if any(_contains_phrase_or_token(text, term) for term in _HUMAN_CLINICAL_TERMS):
+        return 0
+    if any(_contains_phrase_or_token(text, term) for term in _CELL_LINE_TERMS):
+        return 1
+    if any(_contains_phrase_or_token(text, term) for term in _MOUSE_MODEL_TERMS):
+        return 2
+    return 3
+
+
+def _publication_type_rank(record: PubMedRecord) -> int:
+    """Sub-rank within an evidence tier based on study-design quality.
+
+    Applied as a second sort key so a Phase III RCT surfaces above a case
+    report when both share the same evidence-tier rank.
+    """
+    types_lower = {t.lower() for t in record.publication_types}
+    if types_lower & _PUB_TYPE_PHASE3:
+        return 0
+    if types_lower & _PUB_TYPE_PHASE2:
+        return 1
+    if types_lower & _PUB_TYPE_CLINICAL:
+        return 2
+    if types_lower & _PUB_TYPE_CASE_REPORT:
+        return 4
+    return 3  # observational / cohort / retrospective / other
+
+
+def _is_high_impact_journal(record: PubMedRecord) -> bool:
+    return record.journal in _HIGH_IMPACT_JOURNALS
+
+
+def _format_records_for_context(records: list[PubMedRecord], abstract_chars: int) -> str:
+    """Render PubMed records for the LLM prompt, flagging high-impact journals."""
+    parts = []
+    for record in records:
+        journal_tag = f" [{record.journal}]" if record.journal else ""
+        impact_tag = " ★" if _is_high_impact_journal(record) else ""
+        parts.append(
+            f"PMID {record.pmid}{journal_tag}{impact_tag}\n"
+            f"Title: {record.title}\n"
+            f"Abstract: {record.abstract[:abstract_chars]}"
+        )
+    return "\n\n".join(parts)
+
+
+def _context_specific_terms(contexts: list[FusionCurationContext]) -> set[str]:
+    terms = set()
+    for context in contexts:
+        for value in (
+            context.five_transcript,
+            context.three_transcript,
+            context.five_genomic,
+            context.three_genomic,
+            context.five_protein_breakpoint,
+            context.three_protein_breakpoint,
+        ):
+            if value:
+                terms.add(str(value).lower())
+        for exon in (context.five_exon, context.three_exon):
+            if exon:
+                terms.add(f"exon {exon}".lower())
+                terms.add(f"e{exon}".lower())
+        for domain in (
+            *context.retained_domains,
+            *context.lost_domains,
+            *context.disrupted_domains,
+        ):
+            if domain:
+                terms.add(str(domain).split("(", 1)[0].strip().lower())
+        if context.kinase_gene and context.kinase_domain_status:
+            terms.add("kinase domain")
+            terms.add(f"kinase domain {context.kinase_domain_status}".lower())
+        if context.tumor_type:
+            terms.add(context.tumor_type.lower().strip())
+    return {term for term in terms if term}
+
+
+def _record_structural_rank(
+    record: PubMedRecord,
+    fusion_contexts: list[FusionCurationContext],
+) -> int:
+    """3-level rank: 0=exact breakpoint/disease context, 1=general structural, 2=none."""
+    text = _record_text(record)
+    exact_terms = _context_specific_terms(fusion_contexts)
+    if exact_terms and any(_contains_phrase_or_token(text, term) for term in exact_terms):
+        return 0
+    if any(_contains_phrase_or_token(text, term) for term in _STRUCTURAL_CONTEXT_TERMS):
+        return 1
+    return 2
+
+
+def _rank_pubmed_records(
+    records: list[PubMedRecord],
+    *,
+    query_positions: dict[str, int],
+    fusion_contexts: list[FusionCurationContext],
+) -> list[PubMedRecord]:
+    return sorted(
+        records,
+        key=lambda record: (
+            _publication_evidence_rank(record),
+            _publication_type_rank(record),
+            _record_structural_rank(record, fusion_contexts),
+            0 if _is_high_impact_journal(record) else 1,
+            query_positions.get(record.pmid, 10_000),
+            int(record.pmid) if record.pmid.isdigit() else record.pmid,
+        ),
+    )
+
+
 def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> list[str]:
     queries = [
         f'"{gene}"[Title/Abstract] AND (cancer OR tumor OR tumour OR carcinoma)',
+        f'"{gene}" AND ("somatic mutation" OR "mutation frequency" OR "hotspot" OR "mutant") AND cancer',
+        f'"{gene}" AND ("overexpression" OR "expression level" OR "mRNA expression" OR "protein expression") AND cancer',
     ]
     for context in fusion_contexts:
         fusion_hyphen = context.fusion.replace("::", "-")
         queries.extend([
             f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma)',
+            f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
+            *_evidence_priority_queries(fusion_hyphen),
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
         ])
+        if context.tumor_type:
+            queries.append(f'"{fusion_hyphen}" AND "{context.tumor_type}"')
+            queries.append(f'"{gene}" AND "{context.tumor_type}" AND fusion')
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
+            queries.append(f'"{fusion_hyphen}" AND "exon {exon}"')
+        other_exon = context.three_exon if context.side == "five_prime" else context.five_exon
+        if exon and other_exon:
+            queries.append(
+                f'"{gene}" AND "{context.partner_gene}" '
+                f'AND "exon {exon}" AND "exon {other_exon}"'
+            )
+        transcript = context.five_transcript if context.side == "five_prime" else context.three_transcript
+        if transcript:
+            queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        genomic = context.five_genomic if context.side == "five_prime" else context.three_genomic
+        if genomic:
+            queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        protein_breakpoint = (
+            context.five_protein_breakpoint
+            if context.side == "five_prime"
+            else context.three_protein_breakpoint
+        )
+        if protein_breakpoint:
+            queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
         if context.kinase_gene and context.kinase_gene.upper() == gene.upper():
             queries.append(f'"{gene}" AND "kinase domain" AND fusion')
         if context.kinase_gene and context.kinase_domain_status == "retained":
@@ -418,12 +678,37 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
 
     queries = [
         f'"{fusion_hyphen}" AND (cancer OR tumor OR tumour OR carcinoma OR sarcoma OR neoplasm)',
+        f'"{fusion_hyphen}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
+        f'"{fusion_hyphen}" AND (oncogenic OR "functional characterization" OR transformation OR "gain of function")',
+        f'"{fusion_hyphen}" AND (inhibitor OR therapeutic OR treatment OR resistance OR response)',
+        *_evidence_priority_queries(fusion_hyphen),
     ]
     if five_gene and three_gene:
         queries.extend([
             f'"{five_gene}" AND "{three_gene}" AND fusion',
             f'"{five_gene}" AND "{three_gene}" AND (oncogenic OR kinase OR inhibitor OR response)',
+            f'"{five_gene}" AND "{three_gene}" AND (breakpoint OR variant OR exon OR transcript OR frame)',
         ])
+    for context in fusion_contexts:
+        exons = [value for value in (context.five_exon, context.three_exon) if value]
+        if len(exons) == 2 and five_gene and three_gene:
+            queries.append(
+                f'"{five_gene}" AND "{three_gene}" '
+                f'AND "exon {exons[0]}" AND "exon {exons[1]}"'
+            )
+            queries.append(
+                f'"{fusion_hyphen}" AND "exon {exons[0]}" '
+                f'AND "exon {exons[1]}"'
+            )
+        for transcript in (context.five_transcript, context.three_transcript):
+            if transcript:
+                queries.append(f'"{fusion_hyphen}" AND "{transcript}"')
+        for genomic in (context.five_genomic, context.three_genomic):
+            if genomic:
+                queries.append(f'"{fusion_hyphen}" AND "{genomic}"')
+        for protein_breakpoint in (context.five_protein_breakpoint, context.three_protein_breakpoint):
+            if protein_breakpoint:
+                queries.append(f'"{fusion_hyphen}" AND "{protein_breakpoint}"')
     kinase_genes = {
         context.kinase_gene
         for context in fusion_contexts
@@ -431,6 +716,13 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
     }
     for kinase_gene in sorted(kinase_genes):
         queries.append(f'"{fusion_hyphen}" AND "{kinase_gene}" AND "kinase domain"')
+    tumor_types = {
+        context.tumor_type
+        for context in fusion_contexts
+        if context.tumor_type
+    }
+    for tumor_type in sorted(tumor_types):
+        queries.append(f'"{fusion_hyphen}" AND "{tumor_type}"')
     return list(dict.fromkeys(queries))
 
 
@@ -441,11 +733,13 @@ def retrieve_pubmed_records_for_queries(
     ncbi_api_key: str = "",
     ncbi_client: Optional[NcbiClient] = None,
     max_results: int = 8,
+    fusion_contexts: Optional[list[FusionCurationContext]] = None,
 ) -> list[PubMedRecord]:
     ncbi_client = ncbi_client or NcbiClient(api_key=ncbi_api_key)
     pmids = []
     seen_pmids = set()
-    for query in queries:
+    query_positions = {}
+    for query_index, query in enumerate(queries):
         params = {
             "db": "pubmed",
             "term": query,
@@ -458,6 +752,7 @@ def retrieve_pubmed_records_for_queries(
             if pmid not in seen_pmids:
                 seen_pmids.add(pmid)
                 pmids.append(pmid)
+                query_positions[pmid] = query_index
     if not pmids:
         return []
 
@@ -481,9 +776,34 @@ def retrieve_pubmed_records_for_queries(
             "".join(part.itertext()).strip()
             for part in abstract_parts
         ).strip()
+        publication_types = tuple(
+            "".join(part.itertext()).strip()
+            for part in article.findall(".//PublicationTypeList/PublicationType")
+            if "".join(part.itertext()).strip()
+        )
+        mesh_terms = tuple(
+            "".join(part.itertext()).strip()
+            for part in article.findall(".//MeshHeadingList/MeshHeading/DescriptorName")
+            if "".join(part.itertext()).strip()
+        )
+        journal_el = article.find(".//MedlineTA")
+        journal = journal_el.text.strip() if journal_el is not None and journal_el.text else ""
         if pmid and abstract:
-            records.append(PubMedRecord(pmid=pmid, title=title, abstract=abstract))
-    return records
+            records.append(
+                PubMedRecord(
+                    pmid=pmid,
+                    title=title,
+                    abstract=abstract,
+                    publication_types=publication_types,
+                    mesh_terms=mesh_terms,
+                    journal=journal,
+                )
+            )
+    return _rank_pubmed_records(
+        records,
+        query_positions=query_positions,
+        fusion_contexts=fusion_contexts or [],
+    )[:max_results]
 
 
 def retrieve_pubmed_records(
@@ -501,6 +821,7 @@ def retrieve_pubmed_records(
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
+        fusion_contexts=fusion_contexts,
     )
 
 
@@ -612,9 +933,21 @@ def _oncokb_gene_result(
     if levels:
         rationale_parts.append(f"OncoKB reports {', '.join(levels)}.")
 
+    _GENE_CATEGORY_MAP = {
+        "ONCOGENE": "oncogene",
+        "TSG": "tumor_suppressor",
+        "ONCOGENE_AND_TSG": "both",
+        "NEITHER": "neither",
+    }
     return {
         "gene": gene,
         "cancer_associated": _oncokb_cancer_association(gene_type),
+        "gene_category": _GENE_CATEGORY_MAP.get(gene_type, "unknown"),
+        "gene_family": None,       # not available from OncoKB index; populated by LLM path
+        "cancer_role": summary or (background[:300] if background else None),
+        "mutation_profile": None,  # requires PubMed or cBioPortal; not in OncoKB gene index
+        "expression_profile": None,
+        "high_impact_pmids": [],
         "rationale": _truncate_at_sentence(" ".join(rationale_parts)),
         "supporting_pmids": [],
         "retrieved_pmids": [],
@@ -704,6 +1037,8 @@ def _format_fusion_contexts_for_prompt(contexts: list[FusionCurationContext]) ->
                 f"domain_status={context.kinase_domain_status or 'unknown'}"
             ),
         ])
+        if context.tumor_type:
+            lines.append(f"  Cancer/disease type: {context.tumor_type}")
         if context.limitations:
             lines.append(f"  Limitations: {'; '.join(context.limitations)}")
         if context.annotation_error:
@@ -745,22 +1080,36 @@ def curate_gene(
     if not records:
         return _no_pubmed_evidence_result(gene, fusion_contexts)
 
-    context = "\n\n".join(
-        f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
-        for record in records
-    )
+    high_impact_pmids = [r.pmid for r in records if _is_high_impact_journal(r)]
+    context = _format_records_for_context(records, abstract_chars)
     prompt = f"""\
 Gene: {gene}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
 
-PubMed context:
+PubMed context (★ = high-impact journal):
 {context}
 
-Return one JSON object with:
+PubMed records are ordered by retrieval priority. Prefer human clinical or
+patient evidence first, then cell-line/in-vitro functional evidence, then
+mouse/in-vivo model evidence, then review or general biological context. Within
+an evidence tier, prefer records matching the supplied exon, transcript,
+genomic/protein breakpoint, frame, variant, or domain context. Give extra weight
+to papers marked ★ (high-impact journals) when evidence quality is otherwise equal.
+
+Return one JSON object with these fields (use null when evidence is absent):
 - gene
 - cancer_associated: true/false/null
+- gene_category: one of "oncogene", "tumor_suppressor", "both", "neither", "unknown"
+  based on established evidence in the literature
+- gene_family: string naming the gene family or protein class (e.g. "receptor tyrosine kinase",
+  "transcription factor", "serine/threonine kinase"), or null if not determinable
+- cancer_role: 1 sentence describing the gene's general role or mechanism in cancer, or null
+- mutation_profile: what somatic mutation types or hotspots are reported in cancer
+  (e.g. "kinase domain point mutations, amplification in lung and gastric cancer"), or null
+- expression_profile: expression pattern in cancer vs. normal tissue if described
+  (e.g. "overexpressed in 30% of breast cancers, correlates with poor prognosis"), or null
 - rationale: concise curator-facing scan text grounded only in the PubMed context.
   Write 1-2 short sentences, ideally 40-75 words total. Prioritize the
   classification-relevant conclusion, strongest mechanism/cancer context, and
@@ -783,7 +1132,7 @@ junction, retained/lost domains, or kinase-domain retention.
     client = anthropic.Anthropic(api_key=anthropic_api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=1536,
         system=(
             "You are a cancer genomics literature curator. "
             "Use only the provided PubMed context. Return valid JSON only. "
@@ -801,6 +1150,11 @@ junction, retained/lost domains, or kinase-domain retention.
         payload = {
             "gene": gene,
             "cancer_associated": None,
+            "gene_category": "unknown",
+            "gene_family": None,
+            "cancer_role": None,
+            "mutation_profile": None,
+            "expression_profile": None,
             "rationale": text,
             "supporting_pmids": [],
             "retrieved_pmids": [record.pmid for record in records],
@@ -809,7 +1163,13 @@ junction, retained/lost domains, or kinase-domain retention.
         }
     payload.setdefault("gene", gene)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload.setdefault("gene_category", "unknown")
+    payload.setdefault("gene_family", None)
+    payload.setdefault("cancer_role", None)
+    payload.setdefault("mutation_profile", None)
+    payload.setdefault("expression_profile", None)
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload["high_impact_pmids"] = high_impact_pmids
     payload.setdefault("curation_source", "PubMed + LLM")
     return payload
 
@@ -835,27 +1195,39 @@ def curate_fusion(
         ncbi_api_key=ncbi_api_key,
         ncbi_client=ncbi_client,
         max_results=max_results,
+        fusion_contexts=fusion_contexts,
     )
     if not records:
         return _no_fusion_pubmed_evidence_result(fusion, fusion_contexts)
 
-    context = "\n\n".join(
-        f"PMID {record.pmid}\nTitle: {record.title}\nAbstract: {record.abstract[:abstract_chars]}"
-        for record in records
-    )
+    high_impact_pmids = [r.pmid for r in records if _is_high_impact_journal(r)]
+    context = _format_records_for_context(records, abstract_chars)
     prompt = f"""\
 Fusion: {fusion}
 
 Genome Nexus fusion-position context:
 {_format_fusion_contexts_for_prompt(fusion_contexts)}
 
-PubMed context:
+PubMed context (★ = high-impact journal):
 {context}
 
-Return one JSON object with:
+PubMed records are ordered by retrieval priority. Prefer human clinical or
+patient evidence first, then cell-line/in-vitro functional evidence, then
+mouse/in-vivo model evidence, then review or general biological context. Within
+an evidence tier, prefer records matching the supplied exon, transcript,
+genomic/protein breakpoint, frame, variant, or domain context. Give extra weight
+to papers marked ★ (high-impact journals) when evidence quality is otherwise equal.
+
+Return one JSON object with these fields (use null when evidence is absent):
 - fusion
-- fusion_literature_identified: true/false/null
+- fusion_literature_identified: true/false — is the exact fusion described in any paper?
 - cancer_associated: true/false/null
+- observed_in_tumor_type: true/false/null — observed/reported in the indicated cancer type
+  (use tumor_type from the fusion context; null if no tumor_type was supplied)
+- functionally_oncogenic: true/false/null — has this fusion been functionally tested
+  and shown to be oncogenic (transformation assay, kinase activation, mouse model, etc.)?
+- therapeutic_response: list of therapy names (strings) where response was reported,
+  or null if none found
 - rationale: concise curator-facing scan text grounded only in the PubMed context.
   Write 1-2 short sentences, ideally 45-90 words total. State whether the exact
   fusion is described in the literature, the strongest cancer/mechanistic context,
@@ -875,7 +1247,7 @@ kinase-domain status beyond the Genome Nexus context.
     client = anthropic.Anthropic(api_key=anthropic_api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=1024,
+        max_tokens=1536,
         system=(
             "You are a cancer genomics literature curator. "
             "Use only the provided PubMed context. Return valid JSON only. "
@@ -894,6 +1266,9 @@ kinase-domain status beyond the Genome Nexus context.
             "fusion": fusion,
             "fusion_literature_identified": None,
             "cancer_associated": None,
+            "observed_in_tumor_type": None,
+            "functionally_oncogenic": None,
+            "therapeutic_response": None,
             "rationale": text,
             "supporting_pmids": [],
             "retrieved_pmids": [record.pmid for record in records],
@@ -902,7 +1277,11 @@ kinase-domain status beyond the Genome Nexus context.
         }
     payload.setdefault("fusion", fusion)
     payload.setdefault("retrieved_pmids", [record.pmid for record in records])
+    payload.setdefault("observed_in_tumor_type", None)
+    payload.setdefault("functionally_oncogenic", None)
+    payload.setdefault("therapeutic_response", None)
     payload["fusion_contexts"] = _context_dicts(fusion_contexts)
+    payload["high_impact_pmids"] = high_impact_pmids
     return payload
 
 
@@ -935,8 +1314,15 @@ def curate_fusion_genes(
     max_workers = max(1, int(os.environ.get("FUSION_GENE_CURATION_WORKERS", "3")))
     fusion_results = []
     results = []
+    oncokb_token = _oncokb_api_token()
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # Use a single pool for all I/O phases. +1 worker reserves a slot so the
+    # OncoKB prefetch never blocks a fusion-curation worker.
+    with ThreadPoolExecutor(max_workers=max_workers + 1) as executor:
+        # Prefetch OncoKB index in parallel with fusion curation so that fetch
+        # latency (~1-2 s) is fully hidden behind the PubMed + LLM phase.
+        oncokb_prefetch = executor.submit(fetch_oncokb_curated_gene_index, oncokb_token)
+
         fusion_futures = {
             executor.submit(
                 curate_fusion,
@@ -965,51 +1351,54 @@ def curate_fusion_genes(
                     "fusion_contexts": _context_dicts(contexts_by_fusion.get(fusion, [])),
                 })
 
-    sufficient_fusions = {
-        result.get("fusion")
-        for result in fusion_results
-        if _fusion_curation_is_sufficient(result)
-    }
-    genes = []
-    if force_gene_curation:
-        genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
-    else:
-        seen_genes = set()
-        for fusion, contexts in contexts_by_fusion.items():
-            if fusion in sufficient_fusions:
-                continue
-            for context in contexts:
-                if context.gene not in seen_genes:
-                    seen_genes.add(context.gene)
-                    genes.append(context.gene)
+        sufficient_fusions = {
+            result.get("fusion")
+            for result in fusion_results
+            if _fusion_curation_is_sufficient(result)
+        }
+        genes = []
+        if force_gene_curation:
+            genes = list(contexts_by_gene) or unique_genes_from_fusions(fusions)
+        else:
+            seen_genes: set[str] = set()
+            for fusion, contexts in contexts_by_fusion.items():
+                if fusion in sufficient_fusions:
+                    continue
+                for context in contexts:
+                    if context.gene not in seen_genes:
+                        seen_genes.add(context.gene)
+                        genes.append(context.gene)
 
-    oncokb_lookup_error = None
-    oncokb_token = _oncokb_api_token()
-    oncokb_genes_by_symbol = {}
-    if genes:
-        try:
-            oncokb_genes_by_symbol = fetch_oncokb_curated_gene_index(oncokb_token)
-        except OncoKBGeneLookupError as exc:
-            if oncokb_token:
-                oncokb_lookup_error = str(exc)
+        # Resolve the prefetched OncoKB index (should be done by now).
+        oncokb_lookup_error = None
+        oncokb_genes_by_symbol: dict[str, dict] = {}
+        if genes:
+            try:
+                oncokb_genes_by_symbol = oncokb_prefetch.result(timeout=30)
+            except OncoKBGeneLookupError as exc:
+                if oncokb_token:
+                    oncokb_lookup_error = str(exc)
+            except Exception:
+                pass
 
-    if oncokb_lookup_error:
-        for gene in genes:
-            results.append({
-                "gene": gene,
-                "error": oncokb_lookup_error,
-                "insufficient_evidence": True,
-                "supporting_pmids": [],
-                "retrieved_pmids": [],
-                "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
-                "curation_source": "OncoKB",
-            })
-        results.sort(key=lambda item: item.get("gene", ""))
-        fusion_results.sort(key=lambda item: item.get("fusion", ""))
-        return {"fusions": fusion_results, "genes": results}
+        if oncokb_lookup_error:
+            for gene in genes:
+                results.append({
+                    "gene": gene,
+                    "error": oncokb_lookup_error,
+                    "insufficient_evidence": True,
+                    "supporting_pmids": [],
+                    "retrieved_pmids": [],
+                    "fusion_contexts": _context_dicts(contexts_by_gene.get(gene, [])),
+                    "curation_source": "OncoKB",
+                })
+            results.sort(key=lambda item: item.get("gene", ""))
+            fusion_results.sort(key=lambda item: item.get("fusion", ""))
+            return {"fusions": fusion_results, "genes": results}
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
+        # Submit gene curations in the same executor immediately after the
+        # fusion phase — no pool teardown/startup cost between phases.
+        gene_futures = {
             executor.submit(
                 curate_gene,
                 gene,
@@ -1024,8 +1413,8 @@ def curate_fusion_genes(
             ): gene
             for gene in genes
         }
-        for future in as_completed(futures):
-            gene = futures[future]
+        for future in as_completed(gene_futures):
+            gene = gene_futures[future]
             try:
                 results.append(future.result())
             except Exception as exc:

@@ -125,12 +125,208 @@ def test_retrieve_pubmed_records_retries_ncbi_429(monkeypatch):
 
     records = gene_curation.retrieve_pubmed_records("ALK", ncbi_client=client)
 
-    assert calls == [
-        gene_curation.ESEARCH_URL,
-        gene_curation.ESEARCH_URL,
-        gene_curation.EFETCH_URL,
-    ]
+    # First two calls are both ESEARCH (first rate-limited, second the retry).
+    assert calls[0] == gene_curation.ESEARCH_URL
+    assert calls[1] == gene_curation.ESEARCH_URL
+    # Final call is always EFETCH.
+    assert calls[-1] == gene_curation.EFETCH_URL
     assert records[0].pmid == "123"
+
+
+def test_retrieve_pubmed_records_prioritizes_human_cell_line_then_mouse(monkeypatch):
+    class SearchResponse:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"esearchresult": {"idlist": ["3", "2", "1", "4"]}}
+
+    class FetchResponse:
+        status_code = 200
+        headers = {}
+        text = """
+        <PubmedArticleSet>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>3</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK mouse model</ArticleTitle>
+                <Abstract><AbstractText>EML4-ALK xenograft mouse model evidence.</AbstractText></Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>2</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK cell line model</ArticleTitle>
+                <Abstract><AbstractText>EML4-ALK Ba/F3 cell line transformation evidence.</AbstractText></Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>1</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK clinical trial</ArticleTitle>
+                <Abstract><AbstractText>Patients with EML4-ALK responded in a clinical trial.</AbstractText></Abstract>
+                <PublicationTypeList>
+                  <PublicationType>Clinical Trial</PublicationType>
+                </PublicationTypeList>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>4</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK review</ArticleTitle>
+                <Abstract><AbstractText>Review of ALK fusion biology.</AbstractText></Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+        </PubmedArticleSet>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        if url == gene_curation.ESEARCH_URL:
+            return SearchResponse()
+        assert url == gene_curation.EFETCH_URL
+        return FetchResponse()
+
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+    client = gene_curation.NcbiClient(min_interval_seconds=0)
+
+    records = gene_curation.retrieve_pubmed_records_for_queries(
+        "EML4::ALK",
+        ['"EML4-ALK"'],
+        ncbi_client=client,
+        max_results=3,
+    )
+
+    assert [record.pmid for record in records] == ["1", "2", "3"]
+
+
+def test_retrieve_pubmed_records_prioritizes_breakpoint_context_within_evidence_tier(monkeypatch):
+    class SearchResponse:
+        status_code = 200
+        headers = {}
+        text = ""
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"esearchresult": {"idlist": ["10", "9"]}}
+
+    class FetchResponse:
+        status_code = 200
+        headers = {}
+        text = """
+        <PubmedArticleSet>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>10</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK patient cohort</ArticleTitle>
+                <Abstract><AbstractText>Patients with EML4-ALK lung cancer responded to therapy.</AbstractText></Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+          <PubmedArticle>
+            <MedlineCitation>
+              <PMID>9</PMID>
+              <Article>
+                <ArticleTitle>EML4 ALK variant 1 patient evidence</ArticleTitle>
+                <Abstract><AbstractText>Patients with EML4-ALK exon 13 and exon 20 retained kinase signaling.</AbstractText></Abstract>
+              </Article>
+            </MedlineCitation>
+          </PubmedArticle>
+        </PubmedArticleSet>
+        """
+
+        def raise_for_status(self):
+            return None
+
+    def fake_get(url, **kwargs):
+        if url == gene_curation.ESEARCH_URL:
+            return SearchResponse()
+        assert url == gene_curation.EFETCH_URL
+        return FetchResponse()
+
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        five_exon="13",
+        three_exon="20",
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+    monkeypatch.setattr(gene_curation.requests, "get", fake_get)
+    client = gene_curation.NcbiClient(min_interval_seconds=0)
+
+    records = gene_curation.retrieve_pubmed_records_for_queries(
+        "EML4::ALK",
+        ['"EML4-ALK"'],
+        ncbi_client=client,
+        max_results=2,
+        fusion_contexts=[context],
+    )
+
+    assert [record.pmid for record in records] == ["9", "10"]
+
+
+def test_pubmed_queries_include_breakpoint_context_and_evidence_tiers():
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        five_transcript="ENST00000318522",
+        three_transcript="ENST00000389048",
+        five_exon="13",
+        three_exon="20",
+        five_genomic="chr2:42491871",
+        three_genomic="chr2:29446394",
+        five_protein_breakpoint="p.496",
+        three_protein_breakpoint="p.1059",
+        retained_domains=("Protein kinase domain (1116-1383)",),
+        kinase_gene="ALK",
+        kinase_gene_side="three_prime",
+        kinase_domain_status="retained",
+    )
+
+    gene_queries = gene_curation._pubmed_queries("ALK", [context])
+    fusion_queries = gene_curation._fusion_pubmed_queries("EML4::ALK", [context])
+
+    assert (
+        '"EML4-ALK" AND (breakpoint OR variant OR exon OR transcript OR frame)'
+        in gene_queries
+    )
+    assert any('"EML4-ALK" AND ("clinical trial"' in q for q in gene_queries)
+    assert (
+        '"ALK" AND "EML4" AND "exon 20" AND "exon 13"'
+        in gene_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000389048"' in gene_queries
+    assert '"EML4-ALK" AND "chr2:29446394"' in gene_queries
+    assert '"EML4-ALK" AND "p.1059"' in gene_queries
+    assert (
+        '"EML4" AND "ALK" AND "exon 13" AND "exon 20"'
+        in fusion_queries
+    )
+    assert '"EML4-ALK" AND "ENST00000318522"' in fusion_queries
+    assert '"EML4-ALK" AND "p.496"' in fusion_queries
 
 
 def test_curate_fusion_genes_reports_pubmed_rate_limit_as_gene_error(monkeypatch):
@@ -643,5 +839,5 @@ def test_curate_fusion_genes_force_gene_calls_when_requested(monkeypatch):
 
     result = gene_curation.curate_fusion_genes([Fusion()], force_gene_curation=True)
 
-    assert called_genes == ["LMNA", "NTRK1"]
+    assert set(called_genes) == {"LMNA", "NTRK1"}
     assert [item["gene"] for item in result["genes"]] == ["LMNA", "NTRK1"]

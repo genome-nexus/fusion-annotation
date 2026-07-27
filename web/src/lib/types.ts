@@ -205,6 +205,7 @@ export interface AnnotateParams {
   five_transcript?: string;
   three_transcript?: string;
   genome_build: string;
+  tumor_type?: string;
   variant_type?: string;
   input_mode?: "exon" | "genomic" | "gene_pair";
 }

@@ -421,6 +421,13 @@ top-level results block. Curation runs fusion-first: it retrieves and summarizes
 literature for the exact fusion, including whether the fusion itself is
 identified in PubMed, driver/actionability rationale, supporting PMIDs,
 retrieved PMIDs, and any Genome Nexus fusion-position context used by the run.
+When exon, transcript, genomic, protein-breakpoint, frame, variant, or domain
+context is available, PubMed retrieval adds targeted structural queries and
+uses those matches to rank candidate abstracts. Retrieved literature is ordered
+for curation by evidence type: human clinical or patient evidence first, then
+cell-line/in-vitro functional evidence, then mouse/in-vivo model evidence, then
+review or general biological context. Within an evidence tier, breakpoint- or
+variant-matched records are preferred over generic gene-pair records.
 When exact-fusion literature is sufficient, per-gene PubMed/LLM retrieval is
 skipped to reduce latency, rate-limit pressure, and token use; the UI offers a
 per-gene override when deeper review is needed. When exact-fusion literature is

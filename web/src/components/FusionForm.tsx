@@ -176,6 +176,17 @@ export function FusionForm({ initial, derived, onSubmit, loading }: Props) {
 
       <div className="form-row">
         <label>
+          Tumor type <span className="hint">(optional)</span>
+          <input
+            value={values.tumor_type ?? ""}
+            onChange={(e) => update("tumor_type", e.target.value || undefined)}
+            placeholder="e.g. lung adenocarcinoma"
+          />
+        </label>
+      </div>
+
+      <div className="form-row">
+        <label>
           5′ transcript <span className="hint">(optional)</span>
           <input
             value={values.five_transcript ?? ""}
