@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      PORT: "8080"
+      # FUSION_GENE_CURATION_LOCAL_BACKEND is intentionally unset here —
+      # the claude/codex CLI is not available inside the container.
+      # Set ANTHROPIC_API_KEY in .env to enable server-side curation,
+      # or leave it unset to run annotation-only (no curation).
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    ports:
+      - "5174:80"
+    depends_on:
+      - api
