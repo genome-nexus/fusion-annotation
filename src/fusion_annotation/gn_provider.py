@@ -105,6 +105,14 @@ _GENE_CHROM: dict[str, str] = {
     "TGFBR1": "9",  "TGFBR2": "3",  "TMPRSS2": "21","TP53": "17",   "TPM3": "1",
     "TRA": "14",    "TRB": "7",     "TRD": "14",    "TRG": "7",     "TSC1": "9",
     "TSC2": "16",   "U2AF1": "21",  "VHL": "3",     "WT1": "11",    "ZRSR2": "X",
+    # Common fusion partners not in the original cancer gene set
+    "AGK": "7",     "ASPSCR1": "17","ATF1": "5",    "CAMTA1": "1",  "CLTC": "17",
+    "COL1A1": "17", "COL1A2": "7",  "CREB3L1": "11","CREB3L2": "7", "DPP6": "7",
+    "EIF3E": "8",   "FUS": "16",    "GOLGA5": "14", "HMGA1": "6",   "HOOK3": "8",
+    "MALAT1": "11", "NEDD4L": "18", "NR4A3": "9",   "PLAG1": "8",   "PPM1D": "17",
+    "PRKAR1A": "17","RBPMS": "8",   "SQSTM1": "5",  "SRF": "6",     "STRN": "2",
+    "STRN3": "14",  "TCF12": "15",  "TFE3": "X",    "TFEB": "6",    "TRIM24": "7",
+    "TRIM27": "6",  "TRIM33": "1",  "USP6": "17",   "VCL": "10",    "ZNF618": "9",
 }
 
 # Threshold above which we switch to per-exon UCSC fetches instead of one
@@ -115,13 +123,21 @@ _REGION_FETCH_MAX_SPAN_BP = 2_000_000
 def _ncbi_chrom(symbol: str) -> str | None:
     """Resolve gene symbol → chromosome via NCBI esearch + esummary (fallback)."""
     try:
-        params = f"db=gene&term={symbol}[Gene+Name]+AND+human[Organism]+AND+alive[prop]&retmode=json&retmax=1"
+        api_key = os.environ.get("NCBI_API_KEY", "")
+        key_suffix = f"&api_key={api_key}" if api_key else ""
+        params = (
+            f"db=gene&term={symbol}[Gene+Name]+AND+human[Organism]+AND+alive[prop]"
+            f"&retmode=json&retmax=1{key_suffix}"
+        )
         req = urllib.request.Request(f"{_NCBI_ESEARCH}?{params}", headers=dict(_UA))
         with urllib.request.urlopen(req, timeout=10) as resp:
             ids = json.loads(resp.read()).get("esearchresult", {}).get("idlist", [])
         if not ids:
             return None
-        req2 = urllib.request.Request(f"{_NCBI_ESUMMARY}?db=gene&id={ids[0]}&retmode=json", headers=dict(_UA))
+        req2 = urllib.request.Request(
+            f"{_NCBI_ESUMMARY}?db=gene&id={ids[0]}&retmode=json{key_suffix}",
+            headers=dict(_UA),
+        )
         with urllib.request.urlopen(req2, timeout=10) as resp2:
             doc = json.loads(resp2.read()).get("result", {}).get(ids[0], {})
         return doc.get("chromosome") or None
