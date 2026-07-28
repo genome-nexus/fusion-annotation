@@ -329,6 +329,38 @@ def test_pubmed_queries_include_breakpoint_context_and_evidence_tiers():
     assert '"EML4-ALK" AND "p.496"' in fusion_queries
 
 
+def test_tumor_type_alias_expansion():
+    assert gene_curation._expand_tumor_type_terms("LUAD") == ["lung adenocarcinoma", "LUAD"]
+    assert gene_curation._expand_tumor_type_terms("luad") == ["lung adenocarcinoma", "LUAD"]
+    assert gene_curation._expand_tumor_type_terms("Esophagogastric Cancer") == [
+        "esophageal cancer", "gastroesophageal cancer", "esophagogastric", "gastric cancer",
+    ]
+    assert gene_curation._expand_tumor_type_terms("NSCLC") == ["non-small cell lung cancer", "NSCLC"]
+    assert gene_curation._expand_tumor_type_terms("custom histology") == ["custom histology"]
+
+    luad_frag = gene_curation._tumor_type_query_fragment("LUAD")
+    assert '"lung adenocarcinoma"' in luad_frag
+    assert '"LUAD"' in luad_frag
+    assert luad_frag.startswith("(")
+
+    assert gene_curation._tumor_type_query_fragment("custom histology") == '"custom histology"'
+
+
+def test_pubmed_queries_expand_tumor_type_aliases():
+    context = FusionCurationContext(
+        gene="ALK",
+        fusion="EML4::ALK",
+        side="three_prime",
+        partner_gene="EML4",
+        tumor_type="LUAD",
+    )
+    gene_queries = gene_curation._pubmed_queries("ALK", [context])
+    fusion_queries = gene_curation._fusion_pubmed_queries("EML4::ALK", [context])
+
+    assert any('"lung adenocarcinoma"' in q and '"LUAD"' in q for q in gene_queries)
+    assert any('"lung adenocarcinoma"' in q and '"LUAD"' in q for q in fusion_queries)
+
+
 def test_curate_fusion_genes_reports_pubmed_rate_limit_as_gene_error(monkeypatch):
     class Fusion:
         five_gene = "EML4"

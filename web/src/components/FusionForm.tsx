@@ -176,7 +176,15 @@ export function FusionForm({ initial, derived, onSubmit, loading }: Props) {
 
       <div className="form-row">
         <label>
-          Tumor type <span className="hint">(optional)</span>
+          <span className="label-row">
+            Tumor type <span className="hint">(optional)</span>
+            <button
+              type="button"
+              className="field-info"
+              data-tip="Accepted: full name (lung adenocarcinoma), abbreviation (LUAD, NSCLC, AML, GBM, CML, DLBCL…), or database name (Esophagogastric Cancer). Common aliases expand automatically for broader PubMed search."
+              aria-label="Tumor type input help"
+            >i</button>
+          </span>
           <input
             value={values.tumor_type ?? ""}
             onChange={(e) => update("tumor_type", e.target.value || undefined)}
