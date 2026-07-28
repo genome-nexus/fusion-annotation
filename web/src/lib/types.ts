@@ -173,6 +173,12 @@ export interface GeneCurationGeneResult {
   oncokb_highest_sensitive_level?: string;
   oncokb_highest_resistance_level?: string;
   oncokb_url?: string;
+  gene_category?: string;
+  gene_family?: string | null;
+  cancer_role?: string | null;
+  mutation_profile?: string | null;
+  expression_profile?: string | null;
+  high_impact_pmids?: string[];
   error?: string;
 }
 
@@ -185,6 +191,10 @@ export interface GeneCurationFusionResult {
   retrieved_pmids?: string[];
   fusion_contexts?: GeneFusionCurationContext[];
   insufficient_evidence?: boolean;
+  observed_in_tumor_type?: boolean | null;
+  functionally_oncogenic?: boolean | null;
+  therapeutic_response?: string | null;
+  high_impact_pmids?: string[];
   error?: string;
 }
 
