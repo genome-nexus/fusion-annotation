@@ -563,6 +563,95 @@ _HIGH_IMPACT_JOURNALS: frozenset[str] = frozenset({
 })
 
 
+# Mapping of lowercased tumor type input → canonical PubMed search terms.
+# Covers common abbreviations (LUAD, NSCLC, AML …) and cBioPortal-style
+# study names (e.g. "Esophagogastric Cancer") that differ from the phrases
+# used in PubMed abstracts. Keys are lowercased; values are exact phrases
+# that will be OR-combined in the PubMed query.
+_TUMOR_TYPE_ALIASES: dict[str, tuple[str, ...]] = {
+    # NSCLC subtypes
+    "luad": ("lung adenocarcinoma", "LUAD"),
+    "lusc": ("lung squamous cell carcinoma", "LUSC"),
+    "nsclc": ("non-small cell lung cancer", "NSCLC"),
+    "non-small cell lung cancer": ("non-small cell lung cancer", "NSCLC"),
+    "sclc": ("small cell lung cancer", "SCLC"),
+    # Breast
+    "tnbc": ("triple-negative breast cancer", "TNBC"),
+    "invasive breast carcinoma": ("breast cancer", "breast carcinoma", "invasive breast carcinoma"),
+    # GI
+    "crc": ("colorectal cancer", "CRC", "colon cancer"),
+    "coad": ("colon adenocarcinoma", "colorectal cancer", "COAD"),
+    "read": ("rectal adenocarcinoma", "rectal cancer", "READ"),
+    "colorectal adenocarcinoma": ("colorectal cancer", "colon cancer", "rectal cancer", "CRC"),
+    "pdac": ("pancreatic ductal adenocarcinoma", "PDAC", "pancreatic cancer"),
+    "pancreatic adenocarcinoma": ("pancreatic cancer", "PDAC", "pancreatic ductal adenocarcinoma"),
+    "hcc": ("hepatocellular carcinoma", "HCC", "liver cancer"),
+    "gc": ("gastric cancer", "stomach cancer"),
+    "stad": ("stomach adenocarcinoma", "gastric cancer", "STAD"),
+    "eac": ("esophageal adenocarcinoma", "EAC"),
+    "escc": ("esophageal squamous cell carcinoma", "ESCC"),
+    "esophagogastric cancer": (
+        "esophageal cancer", "gastroesophageal cancer", "esophagogastric", "gastric cancer",
+    ),
+    "cca": ("cholangiocarcinoma", "bile duct cancer"),
+    # Renal
+    "rcc": ("renal cell carcinoma", "RCC", "kidney cancer"),
+    "ccrcc": ("clear cell renal cell carcinoma", "ccRCC"),
+    "kirc": ("kidney renal clear cell carcinoma", "clear cell RCC"),
+    "kirp": ("kidney renal papillary cell carcinoma", "papillary RCC"),
+    # Brain / CNS
+    "gbm": ("glioblastoma", "GBM", "glioblastoma multiforme"),
+    "lgg": ("lower grade glioma", "LGG", "glioma"),
+    # Hematologic malignancies
+    "aml": ("acute myeloid leukemia", "AML"),
+    "cml": ("chronic myeloid leukemia", "CML"),
+    "all": ("acute lymphoblastic leukemia", "ALL", "acute lymphocytic leukemia"),
+    "cll": ("chronic lymphocytic leukemia", "CLL"),
+    "mm": ("multiple myeloma", "MM"),
+    "dlbcl": ("diffuse large B-cell lymphoma", "DLBCL"),
+    "fl": ("follicular lymphoma", "FL"),
+    "mcl": ("mantle cell lymphoma", "MCL"),
+    "nhl": ("non-Hodgkin lymphoma", "NHL"),
+    "hl": ("Hodgkin lymphoma", "HL", "Hodgkin disease"),
+    # Gynecologic
+    "ov": ("ovarian cancer", "ovarian serous carcinoma", "OV"),
+    "ucec": ("uterine corpus endometrial carcinoma", "endometrial cancer", "UCEC"),
+    "cesc": ("cervical squamous cell carcinoma", "cervical cancer", "CESC"),
+    # Skin
+    "skcm": ("skin cutaneous melanoma", "melanoma", "SKCM"),
+    "uvm": ("uveal melanoma", "UVM"),
+    # Head and neck
+    "hnscc": ("head and neck squamous cell carcinoma", "HNSCC"),
+    # Thyroid
+    "thca": ("thyroid carcinoma", "THCA", "thyroid cancer"),
+    # Prostate
+    "prad": ("prostate adenocarcinoma", "prostate cancer", "PRAD"),
+    # Bladder
+    "blca": ("bladder urothelial carcinoma", "bladder cancer", "BLCA"),
+    "uc": ("urothelial carcinoma", "bladder cancer"),
+    "urothelial carcinoma": ("urothelial carcinoma", "bladder cancer", "UC"),
+    # Other
+    "meso": ("mesothelioma", "MESO"),
+    "sarc": ("sarcoma", "SARC"),
+    "lcnec": ("large cell neuroendocrine carcinoma", "LCNEC"),
+    "pcpg": ("pheochromocytoma", "paraganglioma", "PCPG"),
+}
+
+
+def _expand_tumor_type_terms(tumor_type: str) -> list[str]:
+    """Return PubMed search phrases for *tumor_type*, expanding abbreviations/aliases."""
+    aliases = _TUMOR_TYPE_ALIASES.get(tumor_type.strip().lower())
+    return list(aliases) if aliases else [tumor_type.strip()]
+
+
+def _tumor_type_query_fragment(tumor_type: str) -> str:
+    """Build a quoted OR-clause covering tumor_type and all its known aliases."""
+    terms = _expand_tumor_type_terms(tumor_type)
+    if len(terms) == 1:
+        return f'"{terms[0]}"'
+    return "(" + " OR ".join(f'"{t}"' for t in terms) + ")"
+
+
 def _or_terms(terms: Iterable[str]) -> str:
     return " OR ".join(f'"{term}"' for term in terms)
 
@@ -663,7 +752,8 @@ def _context_specific_terms(contexts: list[FusionCurationContext]) -> set[str]:
             terms.add("kinase domain")
             terms.add(f"kinase domain {context.kinase_domain_status}".lower())
         if context.tumor_type:
-            terms.add(context.tumor_type.lower().strip())
+            for term in _expand_tumor_type_terms(context.tumor_type):
+                terms.add(term.lower().strip())
     return {term for term in terms if term}
 
 
@@ -715,8 +805,9 @@ def _pubmed_queries(gene: str, fusion_contexts: list[FusionCurationContext]) -> 
             f'"{gene}" AND "{context.partner_gene}" AND fusion',
         ])
         if context.tumor_type:
-            queries.append(f'"{fusion_hyphen}" AND "{context.tumor_type}"')
-            queries.append(f'"{gene}" AND "{context.tumor_type}" AND fusion')
+            tt = _tumor_type_query_fragment(context.tumor_type)
+            queries.append(f'"{fusion_hyphen}" AND {tt}')
+            queries.append(f'"{gene}" AND {tt} AND fusion')
         exon = context.five_exon if context.side == "five_prime" else context.three_exon
         if exon:
             queries.append(f'"{gene}" AND "exon {exon}" AND fusion')
@@ -805,7 +896,7 @@ def _fusion_pubmed_queries(fusion: str, fusion_contexts: list[FusionCurationCont
         if context.tumor_type
     }
     for tumor_type in sorted(tumor_types):
-        queries.append(f'"{fusion_hyphen}" AND "{tumor_type}"')
+        queries.append(f'"{fusion_hyphen}" AND {_tumor_type_query_fragment(tumor_type)}')
     return list(dict.fromkeys(queries))
 
 

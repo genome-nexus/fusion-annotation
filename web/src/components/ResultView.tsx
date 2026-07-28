@@ -261,6 +261,20 @@ function renderFusionContext(context: GeneFusionCurationContext) {
   );
 }
 
+function PmidList({ pmids }: { pmids?: string[] }) {
+  if (!pmids?.length) return <span>None</span>;
+  return (
+    <span>
+      {pmids.map((pmid, i) => (
+        <span key={pmid}>
+          {i > 0 && ", "}
+          <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">{pmid}</a>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function GeneInformationSection({
   result,
   fusionCurationResults,
@@ -298,6 +312,8 @@ function GeneInformationSection({
       && !fusionItem.insufficient_evidence
       && fusionItem.fusion_literature_identified !== false,
   );
+  const isNovelFusion = fusionItem?.fusion_literature_identified === false;
+  const hasCurationData = Boolean(fusionItem || geneCurationResults?.length);
 
   return (
     <section className="gene-info-section">
@@ -309,7 +325,7 @@ function GeneInformationSection({
           </p>
         </div>
         <div className="gene-info-actions">
-          {geneCurationResults?.length || fusionCurationResults?.length ? (
+          {hasCurationData ? (
             <button type="button" className="secondary-button" onClick={onExportGeneCurationCsv}>
               Export curation CSV
             </button>
@@ -317,7 +333,7 @@ function GeneInformationSection({
           {onCurateGenes && (
             <button
               type="button"
-              className="secondary-button"
+              className={hasCurationData ? "secondary-button" : "submit-button"}
               disabled={!geneCurationEnabled || geneCurationLoading}
               onClick={onCurateGenes}
             >
@@ -338,13 +354,22 @@ function GeneInformationSection({
         </div>
       )}
 
+      {isNovelFusion && geneCurationResults?.length ? (
+        <div className="notice-box novel-fusion-banner">
+          <strong>Novel fusion</strong> — no published literature found for{" "}
+          <strong>{result.interface.categorical_key}</strong>. Showing gene-level analysis for each partner.
+        </div>
+      ) : null}
+
       <div className="gene-info-list">
         <details className="gene-info-item" open={Boolean(fusionItem)}>
           <summary>
             <span className="gene-info-symbol">{result.interface.categorical_key}</span>
             <span className="gene-info-summary">
               {fusionItem
-                ? `${fusionItem.fusion_literature_identified === false ? "Fusion literature not found" : "Fusion literature found"} · confidence ${confidenceLabel(fusionItem)}`
+                ? isNovelFusion
+                  ? "Novel — no fusion literature found"
+                  : `Fusion literature found · confidence ${confidenceLabel(fusionItem)}`
                 : "No fusion-specific literature curation loaded"}
             </span>
           </summary>
@@ -362,15 +387,27 @@ function GeneInformationSection({
                 </div>
                 <dl className="gene-curation-fields">
                   <dt>Fusion in literature</dt>
-                  <dd>
-                    {fusionItem.fusion_literature_identified == null
-                      ? "Unknown"
-                      : fusionItem.fusion_literature_identified ? "Yes" : "No"}
-                  </dd>
+                  <dd>{fusionItem.fusion_literature_identified == null ? "Unknown" : fusionItem.fusion_literature_identified ? "Yes" : "No"}</dd>
+                  {fusionItem.observed_in_tumor_type != null && (
+                    <>
+                      <dt>Observed in tumor type</dt>
+                      <dd>{fusionItem.observed_in_tumor_type ? "Yes" : "No"}</dd>
+                    </>
+                  )}
+                  {fusionItem.functionally_oncogenic != null && (
+                    <>
+                      <dt>Functionally oncogenic</dt>
+                      <dd>{fusionItem.functionally_oncogenic ? "Yes" : "No"}</dd>
+                    </>
+                  )}
+                  {fusionItem.therapeutic_response && (
+                    <>
+                      <dt>Therapeutic response</dt>
+                      <dd>{fusionItem.therapeutic_response}</dd>
+                    </>
+                  )}
                   <dt>Known driver signal</dt>
-                  <dd>
-                    {fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}
-                  </dd>
+                  <dd>{fusionItem.cancer_associated == null ? "Unknown" : fusionItem.cancer_associated ? "Yes" : "No"}</dd>
                   <dt>Confidence</dt>
                   <dd>{confidenceLabel(fusionItem)}</dd>
                   <dt>Rationale</dt>
@@ -382,20 +419,15 @@ function GeneInformationSection({
                   </div>
                 )}
                 <div className="pmid-row">
-                  <strong>Rationale Supporting PMIDs</strong>
-                  <span>
-                    {fusionItem.supporting_pmids?.length
-                      ? fusionItem.supporting_pmids.map((pmid, index) => (
-                          <span key={pmid}>
-                            {index > 0 && ", "}
-                            <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">
-                              {pmid}
-                            </a>
-                          </span>
-                        ))
-                      : "None selected"}
-                  </span>
+                  <strong>Supporting PMIDs</strong>
+                  <PmidList pmids={fusionItem.supporting_pmids} />
                 </div>
+                {fusionItem.high_impact_pmids && fusionItem.high_impact_pmids.length > 0 && (
+                  <div className="pmid-row">
+                    <strong>High-impact journal PMIDs ★</strong>
+                    <PmidList pmids={fusionItem.high_impact_pmids} />
+                  </div>
+                )}
                 <div className="pmid-row">
                   <strong>Retrieved PMIDs</strong>
                   <span>{fusionItem.retrieved_pmids?.join(", ") || "None retrieved"}</span>
@@ -411,15 +443,14 @@ function GeneInformationSection({
 
         {fusionSufficient && !geneCurationResults?.length && onForceGeneCuration && (
           <div className="notice-box gene-info-skip">
-            Fusion-specific literature was sufficient, so gene details were skipped. Gene details use OncoKB first
-            and only fall back to literature when needed.
+            Fusion-specific literature was sufficient, so gene details were skipped.
             <button
               type="button"
               className="secondary-button"
               disabled={geneCurationLoading}
               onClick={onForceGeneCuration}
             >
-              Get gene details
+              Get gene details anyway
             </button>
           </div>
         )}
@@ -430,12 +461,20 @@ function GeneInformationSection({
             (context) => context.fusion === result.interface.categorical_key,
           );
           return (
-            <details className="gene-info-item" key={gene}>
+            <details className="gene-info-item" key={gene} open={Boolean(item)}>
               <summary>
                 <span className="gene-info-symbol">{gene}</span>
                 <span className="gene-info-summary">
                   {item
-                    ? `${item.cancer_associated == null ? "Cancer association unknown" : item.cancer_associated ? "Cancer associated" : "No cancer association found"} · confidence ${confidenceLabel(item)}`
+                    ? [
+                        item.gene_category && item.gene_category !== "unknown" ? item.gene_category : null,
+                        item.gene_family ?? null,
+                        item.cancer_associated == null
+                          ? "cancer association unknown"
+                          : item.cancer_associated
+                          ? "cancer associated"
+                          : "no cancer association found",
+                      ].filter(Boolean).join(" · ")
                     : "No gene details loaded"}
                 </span>
               </summary>
@@ -452,6 +491,36 @@ function GeneInformationSection({
                       ))}
                     </div>
                     <dl className="gene-curation-fields">
+                      {item.gene_category && item.gene_category !== "unknown" && (
+                        <>
+                          <dt>Gene category</dt>
+                          <dd>{item.gene_category}</dd>
+                        </>
+                      )}
+                      {item.gene_family && (
+                        <>
+                          <dt>Gene family</dt>
+                          <dd>{item.gene_family}</dd>
+                        </>
+                      )}
+                      {item.cancer_role && (
+                        <>
+                          <dt>Cancer role</dt>
+                          <dd>{item.cancer_role}</dd>
+                        </>
+                      )}
+                      {item.mutation_profile && (
+                        <>
+                          <dt>Mutation profile</dt>
+                          <dd>{item.mutation_profile}</dd>
+                        </>
+                      )}
+                      {item.expression_profile && (
+                        <>
+                          <dt>Expression profile</dt>
+                          <dd>{item.expression_profile}</dd>
+                        </>
+                      )}
                       {item.curation_source && (
                         <>
                           <dt>Source</dt>
@@ -469,12 +538,8 @@ function GeneInformationSection({
                           <dt>OncoKB evidence levels</dt>
                           <dd>
                             {[
-                              item.oncokb_highest_sensitive_level
-                                ? `Sensitive ${item.oncokb_highest_sensitive_level}`
-                                : "",
-                              item.oncokb_highest_resistance_level
-                                ? `Resistance ${item.oncokb_highest_resistance_level}`
-                                : "",
+                              item.oncokb_highest_sensitive_level ? `Sensitive ${item.oncokb_highest_sensitive_level}` : "",
+                              item.oncokb_highest_resistance_level ? `Resistance ${item.oncokb_highest_resistance_level}` : "",
                             ].filter(Boolean).join("; ")}
                           </dd>
                         </>
@@ -495,8 +560,6 @@ function GeneInformationSection({
                       <dd>{confidenceLabel(item)}</dd>
                       <dt>Rationale</dt>
                       <dd>{item.rationale || "No rationale returned."}</dd>
-                      <dt>Fusion knowledge</dt>
-                      <dd>{result.knowledge.oncogenic ?? "No fusion-level knowledge-base signal returned."}</dd>
                     </dl>
                     {contexts && contexts.length > 0 && (
                       <div className="fusion-curation-contexts">
@@ -504,20 +567,15 @@ function GeneInformationSection({
                       </div>
                     )}
                     <div className="pmid-row">
-                      <strong>Rationale Supporting PMIDs</strong>
-                      <span>
-                        {item.supporting_pmids?.length
-                          ? item.supporting_pmids.map((pmid, index) => (
-                              <span key={pmid}>
-                                {index > 0 && ", "}
-                                <a href={pubmedUrl(pmid)} target="_blank" rel="noopener noreferrer">
-                                  {pmid}
-                                </a>
-                              </span>
-                            ))
-                          : "None selected"}
-                      </span>
+                      <strong>Supporting PMIDs</strong>
+                      <PmidList pmids={item.supporting_pmids} />
                     </div>
+                    {item.high_impact_pmids && item.high_impact_pmids.length > 0 && (
+                      <div className="pmid-row">
+                        <strong>High-impact journal PMIDs ★</strong>
+                        <PmidList pmids={item.high_impact_pmids} />
+                      </div>
+                    )}
                     <div className="pmid-row">
                       <strong>Retrieved PMIDs</strong>
                       <span>{item.retrieved_pmids?.join(", ") || "None retrieved"}</span>
@@ -613,6 +671,18 @@ export function ResultView({
         </dd>
       </dl>
 
+      <GeneInformationSection
+        result={result}
+        fusionCurationResults={fusionCurationResults}
+        geneCurationResults={geneCurationResults}
+        geneCurationLoading={geneCurationLoading}
+        geneCurationEnabled={geneCurationEnabled}
+        geneCurationError={geneCurationError}
+        onCurateGenes={onCurateGenes}
+        onForceGeneCuration={onForceGeneCuration}
+        onExportGeneCurationCsv={onExportGeneCurationCsv}
+      />
+
       <h3>Visualization</h3>
       <div className="diagram-toggle" role="tablist" aria-label="Choose visualization">
         <button
@@ -701,18 +771,6 @@ export function ResultView({
       </dl>
 
       <ClinicalEvidence knowledge={knowledge} />
-
-      <GeneInformationSection
-        result={result}
-        fusionCurationResults={fusionCurationResults}
-        geneCurationResults={geneCurationResults}
-        geneCurationLoading={geneCurationLoading}
-        geneCurationEnabled={geneCurationEnabled}
-        geneCurationError={geneCurationError}
-        onCurateGenes={onCurateGenes}
-        onForceGeneCuration={onForceGeneCuration}
-        onExportGeneCurationCsv={onExportGeneCurationCsv}
-      />
 
       <p className="disclaimer">
         This is a research/informatics tool, not a diagnostic device. Results should be reviewed by a

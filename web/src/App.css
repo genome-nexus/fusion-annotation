@@ -266,6 +266,59 @@ header .tagline {
   color: #868e96;
 }
 
+.label-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.field-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: #e7f5ff;
+  color: #1864ab;
+  border: 1px solid #a5d8ff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  font-style: italic;
+  cursor: help;
+  position: relative;
+  padding: 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.field-info::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  background: #212529;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: normal;
+  font-style: normal;
+  padding: 8px 10px;
+  border-radius: 6px;
+  width: 270px;
+  white-space: normal;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+  text-align: left;
+}
+
+.field-info:hover::after,
+.field-info:focus-visible::after {
+  opacity: 1;
+}
+
 .advanced-toggle {
   align-self: flex-start;
   background: none;

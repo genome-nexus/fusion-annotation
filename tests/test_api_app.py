@@ -314,7 +314,8 @@ def test_gene_curation_ui_uses_reviewer_facing_badges():
     assert "Export curation CSV" in result_view_tsx
     assert "Fusion in literature" in result_view_tsx
     assert "OncoKB gene type" in result_view_tsx
-    assert "Rationale Supporting PMIDs" in result_view_tsx
+    assert "Rationale" in result_view_tsx
+    assert "Supporting PMIDs" in result_view_tsx
     assert "Get fusion info" in result_view_tsx
     assert "Get gene details" in result_view_tsx
     assert "fusion_gene_curation.csv" in app_tsx

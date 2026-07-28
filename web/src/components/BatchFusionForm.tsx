@@ -105,7 +105,15 @@ export function BatchFusionForm({
         aria-label="Batch fusion input"
       />
       <label>
-        Tumor type <span className="hint">(optional, applies to all rows)</span>
+        <span className="label-row">
+          Tumor type <span className="hint">(optional, applies to all rows)</span>
+          <button
+            type="button"
+            className="field-info"
+            data-tip="Accepted: full name (lung adenocarcinoma), abbreviation (LUAD, NSCLC, AML, GBM, CML, DLBCL…), or database name (Esophagogastric Cancer). Common aliases expand automatically for broader PubMed search."
+            aria-label="Tumor type input help"
+          >i</button>
+        </span>
         <input
           value={tumorType}
           onChange={(event) => setTumorType(event.target.value)}
