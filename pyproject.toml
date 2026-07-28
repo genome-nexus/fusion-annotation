@@ -37,7 +37,7 @@ docs = ["matplotlib>=3.7"]
 # directly to Ensembl/InterPro/CIViC over HTTPS, no Claude Science dependency.
 # Includes matplotlib so the server can attach a domain diagram image to its
 # tool response (see fusion_annotation.domain_diagram).
-server = ["requests>=2.31", "mcp>=1.9", "starlette>=0.37", "uvicorn>=0.30", "matplotlib>=3.7"]
+server = ["requests>=2.31", "mcp>=1.9,<2.0", "starlette>=0.37", "uvicorn>=0.30", "matplotlib>=3.7"]
 # Standalone public REST API (api/app.py) for the web UI — FastAPI + per-IP
 # rate limiting, backed by the same providers as the MCP server.
 api = ["requests>=2.31", "fastapi>=0.110", "uvicorn>=0.30", "slowapi>=0.1.9", "anthropic>=0.40"]

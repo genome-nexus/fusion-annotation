@@ -306,9 +306,10 @@ def annotate_batch(request: Request, params: BatchAnnotateRequest) -> BatchAnnot
 
 @app.get("/api/gene-curation/status")
 def gene_curation_status() -> dict:
+    local_backend = os.environ.get("FUSION_GENE_CURATION_LOCAL_BACKEND", "").strip()
     return {
-        "enabled": bool(os.environ.get("ANTHROPIC_API_KEY")),
-        "model": os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL),
+        "enabled": bool(os.environ.get("ANTHROPIC_API_KEY")) or bool(local_backend),
+        "model": local_backend or os.environ.get("FUSION_GENE_CURATION_MODEL", DEFAULT_CURATION_MODEL),
     }
 
 
