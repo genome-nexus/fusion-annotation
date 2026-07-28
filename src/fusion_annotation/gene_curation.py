@@ -17,6 +17,9 @@ from typing import Any
 from typing import Iterable
 from typing import Optional
 
+import shutil
+import subprocess
+
 import requests
 
 
@@ -61,6 +64,86 @@ class FusionCurationContext:
     tumor_type: Optional[str] = None
     limitations: tuple[str, ...] = ()
     annotation_error: Optional[str] = None
+
+
+_LOCAL_BACKENDS = ("claude-code", "codex")
+_LOCAL_BACKEND_COMMANDS = {"claude-code": "claude", "codex": "codex"}
+_COMMON_CLI_DIRS = [
+    os.path.expanduser("~/.local/bin"),
+    os.path.expanduser("~/.npm-global/bin"),
+    os.path.expanduser("~/.bun/bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+]
+
+
+def _local_backend() -> Optional[str]:
+    """Return the configured local LLM backend name, or None for SDK mode."""
+    val = os.environ.get("FUSION_GENE_CURATION_LOCAL_BACKEND", "").strip().lower()
+    return val if val in _LOCAL_BACKENDS else None
+
+
+def _resolve_local_agent(backend: str) -> str:
+    """Find the CLI executable for *backend*, raising RuntimeError if absent."""
+    command = _LOCAL_BACKEND_COMMANDS[backend]
+    override = os.environ.get(f"FUSION_CURATION_{backend.upper().replace('-', '_')}_PATH")
+    if override:
+        return override
+    augmented = os.pathsep.join([os.environ.get("PATH", ""), *_COMMON_CLI_DIRS])
+    path = shutil.which(command, path=augmented)
+    if path:
+        return path
+    try:
+        shell = os.environ.get("SHELL", "/bin/sh")
+        result = subprocess.run(
+            [shell, "-lc", f"command -v {command}"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().splitlines()[0]
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    raise RuntimeError(
+        f"Local backend {backend!r} requires the {command!r} CLI but it was not found. "
+        "Install it or set FUSION_GENE_CURATION_LOCAL_BACKEND to an available backend."
+    )
+
+
+def _run_local_llm(system: str, prompt: str, backend: str, timeout: int = 180) -> str:
+    """Shell out to a local agent CLI and return its stdout."""
+    full_prompt = (
+        f"{system}\n\n"
+        f"{prompt}\n\n"
+        "Output ONLY a single valid JSON object. "
+        "Begin your response with {{ and end with }}. "
+        "No markdown fences, no prose before or after."
+    )
+    executable = _resolve_local_agent(backend)
+    if backend == "claude-code":
+        args = [executable, "-p", full_prompt, "--output-format", "text"]
+    elif backend == "codex":
+        args = [executable, "exec", "--sandbox", "read-only", "--skip-git-repo-check",
+                "--ephemeral", "--color", "never", "-"]
+    else:
+        args = [executable, "-p", full_prompt]
+
+    try:
+        result = subprocess.run(
+            args,
+            input=full_prompt if backend == "codex" else None,
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, "PATH": os.pathsep.join([os.environ.get("PATH", ""), *_COMMON_CLI_DIRS])},
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(f"Local agent {args[0]!r} not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"Local agent {backend!r} timed out after {timeout}s") from exc
+
+    if result.returncode != 0:
+        snippet = (result.stderr or result.stdout or "")[:400]
+        raise RuntimeError(f"Local agent {backend!r} exited {result.returncode}: {snippet}")
+
+    return result.stdout.strip()
 
 
 class GeneCurationUnavailable(RuntimeError):
@@ -1067,7 +1150,7 @@ def curate_gene(
     if oncokb_result:
         return oncokb_result
 
-    if not anthropic_api_key:
+    if not anthropic_api_key and not _local_backend():
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
 
     records = retrieve_pubmed_records(
@@ -1127,23 +1210,27 @@ literature evidence and explicitly avoid claims about the exact exon, protein
 junction, retained/lost domains, or kinase-domain retention.
 """
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=anthropic_api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=1536,
-        system=(
-            "You are a cancer genomics literature curator. "
-            "Use only the provided PubMed context. Return valid JSON only. "
-            "Keep rationale text concise and optimized for fast curator review."
-        ),
-        messages=[{"role": "user", "content": prompt}],
+    _system = (
+        "You are a cancer genomics literature curator. "
+        "Use only the provided PubMed context. Return valid JSON only. "
+        "Keep rationale text concise and optimized for fast curator review."
     )
-    text = "".join(
-        block.text for block in response.content
-        if getattr(block, "type", None) == "text"
-    ).strip()
+    backend = _local_backend()
+    if backend:
+        text = _run_local_llm(_system, prompt, backend)
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=1536,
+            system=_system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(
+            block.text for block in response.content
+            if getattr(block, "type", None) == "text"
+        ).strip()
     try:
         payload = json.loads(_strip_markdown_json_fence(text))
     except json.JSONDecodeError:
@@ -1185,7 +1272,7 @@ def curate_fusion(
     abstract_chars: int = 1200,
     fusion_contexts: Optional[list[FusionCurationContext]] = None,
 ) -> dict:
-    if not anthropic_api_key:
+    if not anthropic_api_key and not _local_backend():
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
 
     fusion_contexts = fusion_contexts or []
@@ -1242,23 +1329,27 @@ partner gene. Do not infer transcript, breakpoint, domain-retention, or
 kinase-domain status beyond the Genome Nexus context.
 """
 
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=anthropic_api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=1536,
-        system=(
-            "You are a cancer genomics literature curator. "
-            "Use only the provided PubMed context. Return valid JSON only. "
-            "Keep rationale text concise and optimized for fast curator review."
-        ),
-        messages=[{"role": "user", "content": prompt}],
+    _system = (
+        "You are a cancer genomics literature curator. "
+        "Use only the provided PubMed context. Return valid JSON only. "
+        "Keep rationale text concise and optimized for fast curator review."
     )
-    text = "".join(
-        block.text for block in response.content
-        if getattr(block, "type", None) == "text"
-    ).strip()
+    backend = _local_backend()
+    if backend:
+        text = _run_local_llm(_system, prompt, backend)
+    else:
+        import anthropic
+        client = anthropic.Anthropic(api_key=anthropic_api_key)
+        response = client.messages.create(
+            model=model,
+            max_tokens=1536,
+            system=_system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = "".join(
+            block.text for block in response.content
+            if getattr(block, "type", None) == "text"
+        ).strip()
     try:
         payload = json.loads(_strip_markdown_json_fence(text))
     except json.JSONDecodeError:
@@ -1300,7 +1391,7 @@ def curate_fusion_genes(
     force_gene_curation: bool = False,
 ) -> dict:
     anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not anthropic_api_key:
+    if not anthropic_api_key and not _local_backend():
         raise GeneCurationUnavailable("ANTHROPIC_API_KEY is not configured for server-side curation.")
 
     fusions = list(fusions)
