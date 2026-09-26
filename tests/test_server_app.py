@@ -114,3 +114,24 @@ def test_annotate_gene_fusion_times_out_on_stuck_upstream(monkeypatch):
     assert result.isError is True
     assert "timed out" in result.content[0].text
 
+
+def test_annotate_gene_fusion_resizes_thread_pool_once(monkeypatch):
+    """abandon_on_cancel=True leaves timed-out worker threads running until their
+    own retries finish, still holding a slot in anyio's shared thread pool
+    (default capacity 40). A burst of degraded-upstream timeouts could otherwise
+    fill that pool with zombies and starve fresh annotations of a slot to even
+    start -- size it to Cloud Run's own concurrency cap up front."""
+    import anyio.to_thread
+
+    monkeypatch.setattr(app, "_thread_pool_resized", False)
+    monkeypatch.setattr(app, "THREAD_POOL_CAPACITY", 123)
+
+    async def get_capacity():
+        return anyio.to_thread.current_default_thread_limiter().total_tokens
+
+    async def main():
+        await app._ensure_thread_pool_capacity()
+        return await get_capacity()
+
+    assert asyncio.run(main()) == 123
+

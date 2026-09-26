@@ -68,6 +68,26 @@ ALLOWED_HOSTS = (
 # and gives the caller an actual error instead of a dead connection.
 TOOL_TIMEOUT_SECONDS = float(os.environ.get("FUSION_ANNOTATION_TOOL_TIMEOUT", "60"))
 
+# abandon_on_cancel=True (below) frees the *request* on timeout, but the
+# worker thread itself keeps running -- still occupying a slot in anyio's
+# shared thread pool -- until its own retries finish (up to ~130s). anyio's
+# default pool only has 40 slots; a burst of degraded-upstream timeouts could
+# fill it with abandoned-but-still-running threads and starve fresh
+# annotations of a slot to even start their own timeout window. Size the pool
+# to Cloud Run's own per-instance concurrency cap (--concurrency, 80 by
+# default) so legitimate concurrent traffic is never queued behind zombies.
+THREAD_POOL_CAPACITY = int(os.environ.get("FUSION_ANNOTATION_THREAD_POOL_CAPACITY", "80"))
+_thread_pool_resized = False
+
+
+async def _ensure_thread_pool_capacity() -> None:
+    global _thread_pool_resized
+    if _thread_pool_resized:
+        return
+    anyio.to_thread.current_default_thread_limiter().total_tokens = THREAD_POOL_CAPACITY
+    _thread_pool_resized = True
+
+
 mcp = FastMCP(
     "fusion-annotation",
     instructions=(
@@ -143,6 +163,7 @@ async def annotate_gene_fusion(
             rendering and get a text/structured-only response (faster, no
             matplotlib import).
     """
+    await _ensure_thread_pool_capacity()
     try:
         with anyio.fail_after(TOOL_TIMEOUT_SECONDS):
             # abandon_on_cancel=True: on timeout, return to the caller immediately
