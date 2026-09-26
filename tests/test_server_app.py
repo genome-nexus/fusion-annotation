@@ -9,6 +9,7 @@ Uses StaticProvider seeded from the EML4::ALK fixture (same convention as
 tests/test_api_app.py), monkeypatched in place of make_provider() so these
 tests never hit a real annotation source.
 """
+import asyncio
 import json
 import os
 import sys
@@ -70,7 +71,7 @@ def test_annotate_gene_fusion_attaches_diagram_image(_use_static_provider):
 
     from mcp.types import CallToolResult
 
-    result = app.annotate_gene_fusion("EML4", "ALK", five_exon=13, three_exon=20)
+    result = asyncio.run(app.annotate_gene_fusion("EML4", "ALK", five_exon=13, three_exon=20))
 
     assert isinstance(result, CallToolResult)
     assert result.structuredContent["interface"]["five_gene"] == "EML4"
@@ -84,9 +85,53 @@ def test_annotate_gene_fusion_attaches_diagram_image(_use_static_provider):
 def test_annotate_gene_fusion_include_diagram_false_skips_image(_use_static_provider):
     from mcp.types import CallToolResult
 
-    result = app.annotate_gene_fusion(
-        "EML4", "ALK", five_exon=13, three_exon=20, include_diagram=False)
+    result = asyncio.run(app.annotate_gene_fusion(
+        "EML4", "ALK", five_exon=13, three_exon=20, include_diagram=False))
 
     assert isinstance(result, CallToolResult)
     assert [c.type for c in result.content] == ["text"]
+
+
+def test_annotate_gene_fusion_times_out_on_stuck_upstream(monkeypatch):
+    """A degraded upstream must fail fast, not ride out Cloud Run's 300s
+    request timeout burning (and billing) instance-time the whole way --
+    see the cost investigation in issue #44."""
+    import time
+
+    monkeypatch.setattr(app, "TOOL_TIMEOUT_SECONDS", 0.1)
+
+    def _stuck(*args, **kwargs):
+        time.sleep(5)
+        raise AssertionError("should have been abandoned at the timeout")
+
+    monkeypatch.setattr(app, "_annotate_gene_fusion_sync", _stuck)
+
+    t0 = time.monotonic()
+    result = asyncio.run(app.annotate_gene_fusion("EML4", "ALK", five_exon=13, three_exon=20))
+    elapsed = time.monotonic() - t0
+
+    assert elapsed < 1.0, f"timeout did not abandon the stuck call promptly ({elapsed}s)"
+    assert result.isError is True
+    assert "timed out" in result.content[0].text
+
+
+def test_annotate_gene_fusion_resizes_thread_pool_once(monkeypatch):
+    """abandon_on_cancel=True leaves timed-out worker threads running until their
+    own retries finish, still holding a slot in anyio's shared thread pool
+    (default capacity 40). A burst of degraded-upstream timeouts could otherwise
+    fill that pool with zombies and starve fresh annotations of a slot to even
+    start -- size it to Cloud Run's own concurrency cap up front."""
+    import anyio.to_thread
+
+    monkeypatch.setattr(app, "_thread_pool_resized", False)
+    monkeypatch.setattr(app, "THREAD_POOL_CAPACITY", 123)
+
+    async def get_capacity():
+        return anyio.to_thread.current_default_thread_limiter().total_tokens
+
+    async def main():
+        await app._ensure_thread_pool_capacity()
+        return await get_capacity()
+
+    assert asyncio.run(main()) == 123
 
