@@ -17,6 +17,7 @@ import os
 import sys
 from urllib.parse import urlparse
 
+import anyio
 from starlette.responses import PlainTextResponse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -58,6 +59,15 @@ ALLOWED_HOSTS = (
     if _allowed_hosts_env else ["localhost", "127.0.0.1", "testserver"]
 )
 
+# Hard ceiling on a single annotation's wall-clock time, well under Cloud
+# Run's 300s request timeout. Without this, a degraded upstream (Genome
+# Nexus / UCSC / CIViC) causes _request_with_retry's worst case (~130s per
+# call, several calls per annotation) to stack past 300s: the request rides
+# out the full Cloud Run timeout with no result, burning (and billing)
+# instance-time the whole way. Failing fast here bounds the cost per call
+# and gives the caller an actual error instead of a dead connection.
+TOOL_TIMEOUT_SECONDS = float(os.environ.get("FUSION_ANNOTATION_TOOL_TIMEOUT", "60"))
+
 mcp = FastMCP(
     "fusion-annotation",
     instructions=(
@@ -79,7 +89,7 @@ mcp = FastMCP(
 
 
 @mcp.tool()
-def annotate_gene_fusion(
+async def annotate_gene_fusion(
     five_gene: str,
     three_gene: str,
     five_exon: int | None = None,
@@ -133,6 +143,47 @@ def annotate_gene_fusion(
             rendering and get a text/structured-only response (faster, no
             matplotlib import).
     """
+    try:
+        with anyio.fail_after(TOOL_TIMEOUT_SECONDS):
+            # abandon_on_cancel=True: on timeout, return to the caller immediately
+            # rather than blocking until the worker thread finishes (its default
+            # behavior) -- the whole point is to not ride out a stuck upstream call.
+            return await anyio.to_thread.run_sync(
+                _annotate_gene_fusion_sync,
+                five_gene, three_gene, five_exon, three_exon,
+                five_genomic, three_genomic, five_transcript, three_transcript,
+                genome_build, species, include_diagram,
+                abandon_on_cancel=True,
+            )
+    except TimeoutError:
+        log.warning("annotate_gene_fusion timed out after %ss for %s::%s",
+                     TOOL_TIMEOUT_SECONDS, five_gene, three_gene)
+        return CallToolResult(
+            content=[TextContent(
+                type="text",
+                text=(
+                    f"Annotation timed out after {TOOL_TIMEOUT_SECONDS:.0f}s. An "
+                    "upstream service (Genome Nexus, UCSC, or CIViC) is likely slow "
+                    "or unavailable right now — please try again shortly."
+                ),
+            )],
+            isError=True,
+        )
+
+
+def _annotate_gene_fusion_sync(
+    five_gene: str,
+    three_gene: str,
+    five_exon: int | None,
+    three_exon: int | None,
+    five_genomic: int | str | None,
+    three_genomic: int | str | None,
+    five_transcript: str | None,
+    three_transcript: str | None,
+    genome_build: str,
+    species: str,
+    include_diagram: bool,
+) -> CallToolResult:
     provider = _make_provider(species=species, assembly=genome_build)
     result = annotate_fusion(
         provider, five_gene, three_gene,
